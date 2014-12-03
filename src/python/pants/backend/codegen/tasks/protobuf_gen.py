@@ -27,7 +27,7 @@ from pants.base.build_environment import get_buildroot
 from pants.base.exceptions import TaskError
 from pants.base.target import Target
 from pants.binary_util import BinaryUtil
-from pants.fs.archive import ZIP
+from pants.fs.archive import archiver
 from pants.util.dirutil import safe_mkdir
 
 # Override with protobuf-gen -> supportdir
@@ -59,6 +59,9 @@ class ProtobufGen(CodeGen):
     self.protoc_version = self.context.config.get('protobuf-gen', 'version',
                                                   default=_PROTOBUF_VERSION_DEFAULT)
     self.plugins = self.context.config.getlist('protobuf-gen', 'plugins', default=[])
+
+    # for custom boxcar generation
+    self.service_prefixes = self.context.config.getlist('protobuf-gen', 'service_prefixes', default=[])
 
     self.java_out = os.path.join(self.workdir, 'gen-java')
     self.py_out = os.path.join(self.workdir, 'gen-py')
@@ -129,10 +132,11 @@ class ProtobufGen(CodeGen):
     with open(jar_path, 'rb') as f:
       outdir = os.path.join(self.workdir, 'extracted', sha1(f.read()).hexdigest())
     if not os.path.exists(outdir):
-      ZIP.extract(jar_path, outdir)
-      self.context.log.debug('Extracting jar at {jar_path}.'.format(jar_path=jar_path))
+      _, extension = os.path.splitext(jar_path)
+      archiver(extension[1:]).extract(jar_path, outdir)
+      self.context.log.debug('Extracting archive at {jar_path}.'.format(jar_path=jar_path))
     else:
-      self.context.log.debug('Jar already extracted at {jar_path}.'.format(jar_path=jar_path))
+      self.context.log.debug('Archive already extracted at {jar_path}.'.format(jar_path=jar_path))
     return outdir
 
   def _proto_path_imports(self, proto_targets):
@@ -145,7 +149,7 @@ class ProtobufGen(CodeGen):
     sources = OrderedSet(itertools.chain.from_iterable(sources_by_base.values()))
     bases = OrderedSet(sources_by_base.keys())
     bases.update(self._proto_path_imports(targets))
-    check_duplicate_conflicting_protos(sources_by_base, sources, self.context.log)
+    check_duplicate_conflicting_protos(sources_by_base, sources, self.context.log, self.service_prefixes)
 
     if lang == 'java':
       output_dir = self.java_out
@@ -165,7 +169,7 @@ class ProtobufGen(CodeGen):
       for plugin in self.plugins:
         # TODO(Eric Ayers) Is it a good assumption that the generated source output dir is
         # acceptable for all plugins?
-        args.append("--{0}_protobuf_out={1}".format(plugin, output_dir))
+        args.append("--{0}_out={1}".format(plugin, output_dir))
 
     for base in bases:
       args.append('--proto_path={0}'.format(base))
@@ -206,7 +210,7 @@ class ProtobufGen(CodeGen):
     genfiles = []
     for source in target.sources_relative_to_source_root():
       path = os.path.join(target.target_base, source)
-      genfiles.extend(calculate_genfiles(path, source).get('java', []))
+      genfiles.extend(calculate_genfiles(path, source, self.service_prefixes).get('java', []))
     spec_path = os.path.relpath(self.java_out, get_buildroot())
     address = SyntheticAddress(spec_path, target.id)
     deps = OrderedSet(self.javadeps)
@@ -234,7 +238,7 @@ class ProtobufGen(CodeGen):
     genfiles = []
     for source in target.sources_relative_to_source_root():
       path = os.path.join(target.target_base, source)
-      genfiles.extend(calculate_genfiles(path, source).get('py', []))
+      genfiles.extend(calculate_genfiles(path, source, self.service_prefixes).get('py', []))
     spec_path = os.path.relpath(self.py_out, get_buildroot())
     address = SyntheticAddress(spec_path, target.id)
     tgt = self.context.add_new_target(address,
@@ -248,25 +252,29 @@ class ProtobufGen(CodeGen):
     return tgt
 
 
-def calculate_genfiles(path, source):
+def calculate_genfiles(path, source, service_prefixes):
   protobuf_parse = ProtobufParse(path, source)
   protobuf_parse.parse()
 
   genfiles = defaultdict(set)
   genfiles['py'].update(calculate_python_genfiles(source))
-  genfiles['java'].update(calculate_java_genfiles(protobuf_parse))
+  genfiles['java'].update(calculate_java_genfiles(protobuf_parse, service_prefixes))
   return genfiles
 
 def calculate_python_genfiles(source):
   yield re.sub(r'\.proto$', '_pb2.py', source)
 
-def calculate_java_genfiles(protobuf_parse):
+def calculate_java_genfiles(protobuf_parse, service_prefixes):
   basepath = protobuf_parse.package.replace('.', os.path.sep)
 
   classnames = set([protobuf_parse.outer_class_name])
   if protobuf_parse.multiple_files:
-    classnames |= protobuf_parse.enums | protobuf_parse.messages | protobuf_parse.services | \
+    classnames |= protobuf_parse.enums | protobuf_parse.messages | \
       set(['{name}OrBuilder'.format(name=m) for m in protobuf_parse.messages])
+    # for custom boxcar generation
+    classnames |= set('{}{}'.format(prefix, service)
+                      for service in protobuf_parse.services
+                      for prefix in service_prefixes)
 
   for classname in classnames:
     yield os.path.join(basepath, '{0}.java'.format(classname))
@@ -279,7 +287,7 @@ def _same_contents(a, b):
     b_data = f.read()
   return a_data == b_data
 
-def check_duplicate_conflicting_protos(sources_by_base, sources, log):
+def check_duplicate_conflicting_protos(sources_by_base, sources, log, service_prefixes=None):
   """Checks if proto files are duplicate or conflicting.
 
   There are sometimes two files with the same name on the .proto path.  This causes the protobuf
@@ -299,7 +307,7 @@ def check_duplicate_conflicting_protos(sources_by_base, sources, log):
         continue # Check to make sure we haven't already removed it.
       source = path[len(base):]
 
-      genfiles = calculate_genfiles(path, source)
+      genfiles = calculate_genfiles(path, source, service_prefixes or [''])
       for key in genfiles.keys():
         for genfile in genfiles[key]:
           if genfile in sources_by_genfile:

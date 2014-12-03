@@ -16,7 +16,7 @@ class ImportsUtil(IvyUtils):
     super(ImportsUtil, self).__init__(context.config, context.log)
 
   def is_mappable_artifact(self, org, name, path):
-    return path.endswith('.jar') and super(ImportsUtil, self).is_mappable_artifact(org, name, path)
+    return True
 
   def mapto_dir(self):
     return os.path.join(self._workdir, 'mapped-imports')
