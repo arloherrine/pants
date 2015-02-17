@@ -2,17 +2,15 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-from collections import defaultdict
-from textwrap import dedent
 import itertools
 import os
-import re
 import shutil
 import sys
 import uuid
+from collections import defaultdict
 
 from twitter.common.collections import OrderedSet
 
@@ -20,19 +18,19 @@ from pants.backend.core.tasks.group_task import GroupMember
 from pants.backend.jvm.tasks.jvm_compile.jvm_dependency_analyzer import JvmDependencyAnalyzer
 from pants.backend.jvm.tasks.jvm_compile.jvm_fingerprint_strategy import JvmFingerprintStrategy
 from pants.backend.jvm.tasks.jvm_compile.resource_mapping import ResourceMapping
-from pants.backend.jvm.tasks.jvm_tool_task_mixin import JvmToolTaskMixin
 from pants.backend.jvm.tasks.nailgun_task import NailgunTaskBase
 from pants.base.build_environment import get_buildroot, get_scm
 from pants.base.exceptions import TaskError
 from pants.base.target import Target
 from pants.base.worker_pool import Work
 from pants.goal.products import MultipleRootedProducts
+from pants.option.options import Options
 from pants.reporting.reporting_utils import items_to_report_element
-from pants.util.contextutil import open_zip, temporary_dir
+from pants.util.contextutil import open_zip64, temporary_dir
 from pants.util.dirutil import safe_mkdir, safe_rmtree, safe_walk
 
 
-class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
+class JvmCompile(NailgunTaskBase, GroupMember):
   """A common framework for JVM compilation.
 
   To subclass for a specific JVM language, implement the static values and methods
@@ -46,8 +44,14 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
              help='Roughly how many source files to attempt to compile together. Set to a large '
                   'number to compile all sources together. Set to 0 to compile target-by-target.')
 
+    register('--jvm-options', type=Options.list,
+             help='Run the compiler with these JVM options.')
+
     register('--args', action='append', default=list(cls.get_args_default(register.bootstrap)),
-             help='Args to pass to the compiler.')
+             help='Pass these args to the compiler.')
+
+    register('--confs', type=Options.list, default=['default'],
+             help='Compile for these Ivy confs.')
 
     register('--warnings', default=True, action='store_true',
              help='Compile with all configured warnings enabled.')
@@ -72,36 +76,64 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
                   'implementation detail. However it may still be useful to use this on '
                   'occasion. '.format(cls._language))
 
+    register('--missing-deps-whitelist', type=Options.list,
+             help="Don't report these targets even if they have missing deps.")
+
     register('--unnecessary-deps', choices=['off', 'warn', 'fatal'], default='off',
              help='Check for declared dependencies in {0} code that are not needed. This is a very '
                   'strict check. For example, generated code will often legitimately have BUILD '
                   'dependencies that are unused in practice.'.format(cls._language))
 
+    register('--changed-targets-heuristic-limit', type=int, default=0,
+             help='If non-zero, and we have fewer than this number of locally-changed targets, '
+                  'partition them separately, to preserve stability when compiling repeatedly.')
+
     register('--delete-scratch', default=True, action='store_true',
              help='Leave intermediate scratch files around, for debugging build problems.')
-
-
-  # Subclasses must implement.
-  # --------------------------
-  _language = None
-  _file_suffix = None
-  _config_section = None
-
-  @classmethod
-  def name(cls):
-    return cls._language
 
   @classmethod
   def product_types(cls):
     return ['classes_by_target', 'classes_by_source', 'resources_by_target']
 
   @classmethod
+  def prepare(cls, options, round_manager):
+    super(JvmCompile, cls).prepare(options, round_manager)
+
+    # This task uses JvmDependencyAnalyzer as a helper, get its product needs
+    JvmDependencyAnalyzer.prepare(options, round_manager)
+
+    round_manager.require_data('compile_classpath')
+    round_manager.require_data('ivy_cache_dir')
+    round_manager.require_data('ivy_resolve_symlink_map')
+
+    # Require codegen we care about
+    # TODO(John Sirois): roll this up in Task - if the list of labels we care about for a target
+    # predicate to filter the full build graph is exposed, the requirement can be made automatic
+    # and in turn codegen tasks could denote the labels they produce automating wiring of the
+    # produce side
+    round_manager.require_data('java')
+    round_manager.require_data('scala')
+
+    # Allow the deferred_sources_mapping to take place first
+    round_manager.require_data('deferred_sources')
+
+  # Subclasses must implement.
+  # --------------------------
+  _language = None
+  _file_suffix = None
+
+  @classmethod
+  def name(cls):
+    return cls._language
+
+  @classmethod
   def get_args_default(cls, bootstrap_option_values):
     """Override to set default for --args option.
 
-    :param bootstrap_option_values: An the values of the "bootstrap options" (e.g., pants_workdir).
+    :param bootstrap_option_values: The values of the "bootstrap options" (e.g., pants_workdir).
                                     Implementations can use these when generating the default.
-                                    See src/python/pants/options/bootstrap_options.py for details.
+                                    See src/python/pants/options/options_bootstrapper.py for
+                                    details.
     """
     return ()
 
@@ -114,6 +146,10 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
   def get_no_warning_args_default(cls):
     """Override to set default for --no-warning-args option."""
     return ()
+
+  @property
+  def config_section(self):
+    return self.options_scope
 
   def select(self, target):
     return target.has_sources(self._file_suffix)
@@ -166,7 +202,6 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
 
   def __init__(self, *args, **kwargs):
     super(JvmCompile, self).__init__(*args, **kwargs)
-    config_section = self.config_section
 
     # Various working directories.
     self._classes_dir = os.path.join(self.workdir, 'classes')
@@ -191,10 +226,10 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
     self._partition_size_hint = self.get_options().partition_size_hint
 
     # JVM options for running the compiler.
-    self._jvm_options = self.context.config.getlist(config_section, 'jvm_args')
+    self._jvm_options = self.get_options().jvm_options
 
     # The ivy confs for which we're building.
-    self._confs = self.context.config.getlist(config_section, 'confs', default=['default'])
+    self._confs = self.get_options().confs
 
     self._args = list(self.get_options().args)
     if self.get_options().warnings:
@@ -212,8 +247,7 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
     check_unnecessary_deps = munge_flag('unnecessary_deps')
 
     if check_missing_deps or check_missing_direct_deps or check_unnecessary_deps:
-      target_whitelist = self.context.config.getlist('jvm', 'missing_deps_target_whitelist', default=[])
-
+      target_whitelist = self.get_options().missing_deps_whitelist
       # Must init it here, so it can set requirements on the context.
       self._dep_analyzer = JvmDependencyAnalyzer(self.context,
                                                  check_missing_deps,
@@ -226,11 +260,10 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
     # If non-zero, and we have fewer than this number of locally-changed targets,
     # then we partition them separately, to preserve stability in the face of repeated
     # compilations.
-    self._locally_changed_targets_heuristic_limit = self.context.config.getint(config_section,
-        'locally_changed_targets_heuristic_limit', 0)
+    self._changed_targets_heuristic_limit = self.get_options().changed_targets_heuristic_limit
 
     self._upstream_class_to_path = None  # Computed lazily as needed.
-    self.setup_artifact_cache_from_config(config_section=config_section)
+    self.setup_artifact_cache()
 
     # Sources (relative to buildroot) present in the last analysis that have since been deleted.
     # Populated in prepare_execute().
@@ -239,21 +272,6 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
     # Map of target -> list of sources (relative to buildroot), for all targets in all chunks.
     # Populated in prepare_execute().
     self._sources_by_target = None
-
-  def prepare(self, round_manager):
-    # TODO(John Sirois): this is a fake requirement on 'ivy_jar_products' in order to force
-    # resolve to run before this goal.  Require a new CompileClasspath product to be produced by
-    # IvyResolve instead.
-    round_manager.require_data('ivy_jar_products')
-    round_manager.require_data('exclusives_groups')
-
-    # Require codegen we care about
-    # TODO(John Sirois): roll this up in Task - if the list of labels we care about for a target
-    # predicate to filter the full build graph is exposed, the requirement can be made automatic
-    # and in turn codegen tasks could denote the labels they produce automating wiring of the
-    # produce side
-    round_manager.require_data('java')
-    round_manager.require_data('scala')
 
   def move(self, src, dst):
     if self._delete_scratch:
@@ -292,15 +310,9 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
     all_targets = list(itertools.chain(*chunks))
 
     # Update the classpath for us and for downstream tasks.
-    egroups = self.context.products.get_data('exclusives_groups')
-    all_group_ids = set()
-    for t in all_targets:
-      all_group_ids.add(egroups.get_group_key_for_target(t))
-
+    compile_classpath = self.context.products.get_data('compile_classpath')
     for conf in self._confs:
-      for group_id in all_group_ids:
-        egroups.update_compatible_classpaths(group_id, [(conf, self._classes_dir)])
-        egroups.update_compatible_classpaths(group_id, [(conf, self._resources_dir)])
+      compile_classpath.update([(conf, self._classes_dir), (conf, self._resources_dir)])
 
     # Target -> sources (relative to buildroot).
     # TODO(benjy): Should sources_by_target be available in all Tasks?
@@ -351,19 +363,16 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
     if not relevant_targets:
       return
 
-    # Get the exclusives group for the targets to compile.
-    # Group guarantees that they'll be a single exclusives key for them.
-    egroups = self.context.products.get_data('exclusives_groups')
-    group_id = egroups.get_group_key_for_target(relevant_targets[0])
-
     # Get the classpath generated by upstream JVM tasks and our own prepare_execute().
-    classpath = egroups.get_classpath_for_group(group_id)
+    compile_classpath = self.context.products.get_data('compile_classpath')
 
     # Add any extra compile-time-only classpath elements.
     # TODO(benjy): Model compile-time vs. runtime classpaths more explicitly.
-    for conf in self._confs:
-      for jar in self.extra_compile_time_classpath_elements():
-        classpath.insert(0, (conf, jar))
+    def extra_compile_classpath_iter():
+      for conf in self._confs:
+        for jar in self.extra_compile_time_classpath_elements():
+           yield (conf, jar)
+    compile_classpath = OrderedSet(list(extra_compile_classpath_iter()) + list(compile_classpath))
 
     # Target -> sources (relative to buildroot), for just this chunk's targets.
     sources_by_target = self._sources_for_targets(relevant_targets)
@@ -372,10 +381,10 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
     # changes synced in from the SCM).
     # TODO(benjy): Should locally_changed_targets be available in all Tasks?
     locally_changed_targets = None
-    if self._locally_changed_targets_heuristic_limit:
+    if self._changed_targets_heuristic_limit:
       locally_changed_targets = self._find_locally_changed_targets(sources_by_target)
-      if locally_changed_targets and \
-              len(locally_changed_targets) > self._locally_changed_targets_heuristic_limit:
+      if (locally_changed_targets and
+          len(locally_changed_targets) > self._changed_targets_heuristic_limit):
         locally_changed_targets = None
 
     # Invalidation check. Everything inside the with block must succeed for the
@@ -384,7 +393,8 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
                           invalidate_dependents=True,
                           partition_size_hint=self._partition_size_hint,
                           locally_changed_targets=locally_changed_targets,
-                          fingerprint_strategy=self._jvm_fingerprint_strategy()) as invalidation_check:
+                          fingerprint_strategy=self._jvm_fingerprint_strategy(),
+                          topological_order=True) as invalidation_check:
       if invalidation_check.invalid_vts:
         # Find the invalid sources for this chunk.
         invalid_targets = [vt.target for vt in invalidation_check.invalid_vts]
@@ -425,10 +435,13 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
             self._analysis_tools.split_to_paths(self._invalid_analysis_file, splits)
 
         # Now compile partitions one by one.
-        for partition in partitions:
+        for partition_index, partition in enumerate(partitions):
           (vts, sources, analysis_file) = partition
-          cp_entries = [entry for conf, entry in classpath if conf in self._confs]
-          self._process_target_partition(partition, cp_entries)
+          cp_entries = [entry for conf, entry in compile_classpath if conf in self._confs]
+
+          progress_message = '{} of {}'.format(partition_index + 1, len(partitions))
+          self._process_target_partition(partition, cp_entries, progress_message)
+
           # No exception was thrown, therefore the compile succeded and analysis_file is now valid.
           if os.path.exists(analysis_file):  # The compilation created an analysis.
             # Merge the newly-valid analysis with our global valid analysis.
@@ -453,7 +466,7 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
               actual_deps = self._analysis_parser.parse_deps_from_path(analysis_file,
                   lambda: self._compute_classpath_elements_by_class(cp_entries))
               with self.context.new_workunit(name='find-missing-dependencies'):
-                self._dep_analyzer.check(sources, actual_deps)
+                self._dep_analyzer.check(sources, actual_deps, self.ivy_cache_dir)
 
             # Kick off the background artifact cache write.
             if self.artifact_cache_writes_enabled():
@@ -481,7 +494,7 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
 
     self.post_process(relevant_targets)
 
-  def _process_target_partition(self, partition, classpath):
+  def _process_target_partition(self, partition, classpath, progress_message):
     """Needs invoking only on invalid targets.
 
     partition - a triple (vts, sources_by_target, analysis_file).
@@ -503,7 +516,10 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
         'Compiling a partition containing ',
         items_to_report_element(sources, 'source'),
         ' in ',
-        items_to_report_element([t.address.reference() for t in vts.targets], 'target'), '.')
+        items_to_report_element([t.address.reference() for t in vts.targets], 'target'),
+        ' (partition ',
+        progress_message,
+        ').')
       with self.context.new_workunit('compile'):
         # The compiler may delete classfiles, then later exit on a compilation error. Then if the
         # change triggering the error is reverted, we won't rebuild to restore the missing
@@ -597,7 +613,7 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
         continue
       artifacts = []
       if resources_by_target is not None:
-        for _, paths in resources_by_target.get(target).abs_paths():
+        for _, paths in resources_by_target[target].abs_paths():
           artifacts.extend(paths)
       for source in sources:
         classes = classes_by_source.get(source, [])
@@ -727,7 +743,7 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
       for cp_entry in self.find_all_bootstrap_jars() + classpath_entries:
         # Per the classloading spec, a 'jar' in this context can also be a .zip file.
         if os.path.isfile(cp_entry) and ((cp_entry.endswith('.jar') or cp_entry.endswith('.zip'))):
-          with open_zip(cp_entry, 'r') as jar:
+          with open_zip64(cp_entry, 'r') as jar:
             for cls in jar.namelist():
               # First jar with a given class wins, just like when classloading.
               if cls.endswith(b'.class') and not cls in self._upstream_class_to_path:
@@ -775,6 +791,13 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
   def _analysis_parser(self):
     return self._analysis_tools.parser
 
+  @property
+  def ivy_cache_dir(self):
+    ret = self.context.products.get_data('ivy_cache_dir')
+    if ret is None:
+      raise TaskError('ivy_cache_dir product accessed before it was created.')
+    return ret
+
   def _sources_for_targets(self, targets):
     """Returns a map target->sources for the specified targets."""
     if self._sources_by_target is None:
@@ -796,12 +819,13 @@ class JvmCompile(NailgunTaskBase, GroupMember, JvmToolTaskMixin):
     make_products = lambda: defaultdict(MultipleRootedProducts)
     if self.context.products.is_required_data('classes_by_source'):
       self.context.products.safe_create_data('classes_by_source', make_products)
-    if self.context.products.is_required_data('classes_by_target'):
-      self.context.products.safe_create_data('classes_by_target', make_products)
 
     # Whether or not anything else requires resources_by_target, this task
     # uses it internally.
     self.context.products.safe_create_data('resources_by_target', make_products)
+
+    # JvmDependencyAnalyzer uses classes_by_target within this run
+    self.context.products.safe_create_data('classes_by_target', make_products)
 
   def _resources_by_class_file(self, class_file_name, resource_mapping):
     assert class_file_name.endswith(".class")

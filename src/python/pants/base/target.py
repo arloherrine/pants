@@ -2,21 +2,23 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-import collections
-from hashlib import sha1
 import os
+import sys
+from hashlib import sha1
 
 from twitter.common.lang import Compatibility
 
+from pants.base.address import Addresses, SyntheticAddress
 from pants.base.build_environment import get_buildroot
 from pants.base.build_manual import manual
 from pants.base.exceptions import TargetDefinitionException
 from pants.base.fingerprint_strategy import DefaultFingerprintStrategy
 from pants.base.hash_utils import hash_all
 from pants.base.payload import Payload
+from pants.base.payload_field import DeferredSourcesField, SourcesField
 from pants.base.source_root import SourceRoot
 from pants.base.target_addressable import TargetAddressable
 from pants.base.validation import assert_list
@@ -34,71 +36,109 @@ class AbstractTarget(object):
     # TODO(John Sirois): fixup predicate dipping down into details here.
     return self.has_label('exportable') and self.provides
 
+  # DEPRECATED to be removed after 0.0.29
+  # do not use this method, use an isinstance check on JarDependency
   @property
   def is_jar(self):
     """Returns True if the target is a jar."""
+    print('The `Target.is_jar` property is deprecated and will be removed after 0.0.29.',
+          file=sys.stderr)
     return False
 
+  # DEPRECATED to be removed after 0.0.29
+  # Do not use this method, use an isinstance check on JavaAgent
   @property
   def is_java_agent(self):
     """Returns `True` if the target is a java agent."""
+    print('The `Target.is_java_agent` property is deprecated and will be removed after 0.0.29.',
+          file=sys.stderr)
     return self.has_label('java_agent')
 
+  # DEPRECATED  to be removed after 0.0.29
+  # do not use this method, use an isinstance check on JvmApp
   @property
   def is_jvm_app(self):
     """Returns True if the target produces a java application with bundled auxiliary files."""
+    print('The `Target.is_jvm_app` property is deprecated and will be removed after 0.0.29.',
+          file=sys.stderr)
     return False
 
+  # DEPRECATED  to be removed after 0.0.29
+  # do not use this method, use  isinstance(..., JavaThriftLibrary) or a yet-to-be-defined mixin
   @property
   def is_thrift(self):
     """Returns True if the target has thrift IDL sources."""
     return False
 
+  # DEPRECATED to be removed after 0.0.29
+  # do not use this method, use an isinstance check on a yet-to-be-defined mixin
   @property
   def is_jvm(self):
     """Returns True if the target produces jvm bytecode."""
     return self.has_label('jvm')
 
+  # DEPRECATED to be removed after 0.0.29
+  # do not use this method, use an isinstance check on a yet-to-be-defined mixin
   @property
   def is_codegen(self):
     """Returns True if the target is a codegen target."""
     return self.has_label('codegen')
 
+  # DEPRECATED to be removed after 0.0.29
+  # do not use this method, use an isinstance check on JarLibrary
   @property
   def is_jar_library(self):
     """Returns True if the target is an external jar library."""
+    print('The `Target.is_jar_library` property is deprecated and will be removed after 0.0.29.',
+          file=sys.stderr)
     return self.has_label('jars')
 
+  # DEPRECATED to be removed after 0.0.29
+  # do not use this method, use an isinstance check on a yet-to-be-defined mixin
   @property
   def is_java(self):
     """Returns True if the target has or generates java sources."""
     return self.has_label('java')
 
+  # DEPRECATED to be removed after 0.0.29
+  # do not use this method, use an isinstance check on AnnotationProcessor
   @property
   def is_apt(self):
     """Returns True if the target exports an annotation processor."""
+    print('The `Target.is_apt` property is deprecated and will be removed after 0.0.29.',
+          file=sys.stderr)
     return self.has_label('apt')
 
+  # DEPRECATED to be removed after 0.0.29
+  # do not use this method, use an isinstance check on a yet-to-be-defined mixin
   @property
   def is_python(self):
     """Returns True if the target has python sources."""
     return self.has_label('python')
 
+  # DEPRECATED to be removed after 0.0.29
+  # do not use this method, use an isinstance check on a yet-to-be-defined mixin
   @property
   def is_scala(self):
     """Returns True if the target has scala sources."""
     return self.has_label('scala')
 
+  # DEPRECATED to be removed after 0.0.29
+  #  do not use this method, use an isinstance check on a yet-to-be-defined mixin
   @property
   def is_scalac_plugin(self):
     """Returns True if the target builds a scalac plugin."""
     return self.has_label('scalac_plugin')
 
+  # DEPRECATED to be removed after 0.0.29
+  # do not use this method, use an isinstance check on a yet-to-be-defined mixin
   @property
   def is_test(self):
     """Returns True if the target is comprised of tests."""
     return self.has_label('tests')
 
+  # DEPRECATED to be removed after 0.0.29
+  # do not use this method, use an isinstance check on a yet-to-be-defined mixin
   @property
   def is_android(self):
     """Returns True if the target is an android target."""
@@ -111,6 +151,10 @@ class Target(AbstractTarget):
   Handles registration of a target amongst all parsed targets as well as location of the target
   parse context.
   """
+
+  class WrongNumberOfAddresses(Exception):
+    """Internal error, too many elements in Addresses"""
+    pass
 
   LANG_DISCRIMINATORS = {
     'java':   lambda t: t.is_jvm,
@@ -167,7 +211,7 @@ class Target(AbstractTarget):
     ids = list(ids)  # We can't len a generator.
     return ids[0] if len(ids) == 1 else cls.combine_ids(ids)
 
-  def __init__(self, name, address, build_graph, payload=None, exclusives=None, tags=None):
+  def __init__(self, name, address, build_graph, payload=None, tags=None):
     """
     :param string name: The name of this target, which combined with this
       build file defines the target address.
@@ -177,9 +221,6 @@ class Target(AbstractTarget):
     :param BuildGraph build_graph: The BuildGraph that this Target lives within
     :param Payload payload: The configuration encapsulated by this target.  Also in charge of
       most fingerprinting details.
-    :param exclusives: An optional map of exclusives tags.
-       `Keeps incompatible changes apart
-       <build_files.html#howto-check-exclusives>`_.
     :param iterable<string> tags: Arbitrary string tags that describe this target. Usable
         by downstream/custom tasks for reasoning about build graph. NOT included in payloads
         and thus not used in fingerprinting, thus not suitable for anything that affects how
@@ -194,11 +235,6 @@ class Target(AbstractTarget):
     self._build_graph = build_graph
     self.description = None
     self.labels = set()
-    self.declared_exclusives = collections.defaultdict(set)
-    if exclusives is not None:
-      for k in exclusives:
-        self.declared_exclusives[k].add(exclusives[k])
-    self.exclusives = None
 
     self._cached_fingerprint_map = {}
     self._cached_transitive_fingerprint_map = {}
@@ -243,16 +279,25 @@ class Target(AbstractTarget):
     """
     :param FingerprintStrategy fingerprint_strategy: optional fingerprint strategy to use to compute
     the fingerprint of a target
-    :return: a fingerprint representing this target and all of its dependencies
+    :return: A fingerprint representing this target and all of its dependencies.
+      The return value can be `None`, indicating that this target and all of its transitive dependencies
+      did not contribute to the fingerprint, according to the provided FingerprintStrategy.
     :rtype: string
     """
     fingerprint_strategy = fingerprint_strategy or DefaultFingerprintStrategy()
     if fingerprint_strategy not in self._cached_transitive_fingerprint_map:
       hasher = sha1()
-      direct_deps = sorted(self.dependencies)
-      for dep in direct_deps:
-        hasher.update(dep.transitive_invalidation_hash(fingerprint_strategy))
+      def dep_hash_iter():
+        for dep in self.dependencies:
+          dep_hash = dep.transitive_invalidation_hash(fingerprint_strategy)
+          if dep_hash is not None:
+            yield dep_hash
+      dep_hashes = sorted(list(dep_hash_iter()))
+      for dep_hash in dep_hashes:
+        hasher.update(dep_hash)
       target_hash = self.invalidation_hash(fingerprint_strategy)
+      if target_hash is None and not dep_hashes:
+        return None
       dependencies_hash = hasher.hexdigest()[:12]
       combined_hash = '{target_hash}.{deps_hash}'.format(target_hash=target_hash,
                                                          deps_hash=dependencies_hash)
@@ -340,7 +385,10 @@ class Target(AbstractTarget):
     graph and linked in the graph as dependencies of this target
     :rtype: list of strings
     """
-    return []
+    # To support DeferredSourcesField
+    for name, payload_field in self.payload.fields:
+      if isinstance(payload_field, DeferredSourcesField) and payload_field.address:
+        yield payload_field.address.spec
 
   @property
   def dependencies(self):
@@ -365,45 +413,12 @@ class Target(AbstractTarget):
     """
     :return: True if this target did not originate from a BUILD file.
     """
-    return self.address.is_synthetic
+    return self.concrete_derived_from.address != self.address
 
   @property
   def is_original(self):
     """Returns ``True`` if this target is derived from no other."""
     return self.derived_from == self
-
-  def get_all_exclusives(self):
-    """ Get a map of all exclusives declarations in the transitive dependency graph.
-
-    For a detailed description of the purpose and use of exclusives tags,
-    see the documentation of the CheckExclusives task.
-
-    """
-    if self.exclusives is None:
-      self._propagate_exclusives()
-    return self.exclusives
-
-  def _propagate_exclusives(self):
-    if self.exclusives is None:
-      self.exclusives = collections.defaultdict(set)
-      self.add_to_exclusives(self.declared_exclusives)
-      # This may perform more work than necessary.
-      # We want to just traverse the immediate dependencies of this target,
-      # but for a general target, we can't do that. _propagate_exclusives is overridden
-      # in subclasses when possible to avoid the extra work.
-      self.walk(lambda t: self._propagate_exclusives_work(t))
-
-  def _propagate_exclusives_work(self, target):
-    # Note: this will cause a stack overflow if there is a cycle in
-    # the dependency graph, so exclusives checking should occur after
-    # cycle detection.
-    self.add_to_exclusives(target.declared_exclusives)
-    return None
-
-  def add_to_exclusives(self, exclusives):
-    if exclusives is not None:
-      for key in exclusives:
-        self.exclusives[key] |= exclusives[key]
 
   @property
   def id(self):
@@ -452,12 +467,15 @@ class Target(AbstractTarget):
     self.description = description
     return self
 
+  # TODO(Eric Ayers) As of 2/5/2015 this call is DEPRECATED and should be removed soon
   def add_labels(self, *label):
     self.labels.update(label)
 
+  # TODO(Eric Ayers) As of 2/5/2015 this call is DEPRECATED and should be removed soon
   def remove_label(self, label):
     self.labels.remove(label)
 
+  # TODO(Eric Ayers) As of 2/5/2015 this call is DEPRECATED and should be removed soon
   def has_label(self, label):
     return label in self.labels
 
@@ -476,3 +494,23 @@ class Target(AbstractTarget):
   def __repr__(self):
     addr = self.address if hasattr(self, 'address') else 'address not yet set'
     return "%s(%s)" % (type(self).__name__, addr)
+
+  def create_sources_field(self, sources, sources_rel_path, address=None, build_graph=None):
+    """Factory method to create a SourcesField appropriate for the type of the sources object.
+
+    Note that this method is called before the call to Target.__init__ so don't expect fields to
+    be populated!
+    :return: a payload field object representing the sources parameter
+    :rtype: SourcesField
+    """
+
+    if isinstance(sources, Addresses):
+      # Currently, this is only created by the result of from_target() which takes a single argument
+      if len(sources.addresses) != 1:
+        raise self.WrongNumberOfAddresses(
+          "Expected a single address to from_target() as argument to {spec}"
+          .format(spec=address.spec))
+      referenced_address = SyntheticAddress.parse(sources.addresses[0],
+                                                  relative_to=sources.rel_path)
+      return DeferredSourcesField(ref_address=referenced_address)
+    return SourcesField(sources=sources, sources_rel_path=sources_rel_path)

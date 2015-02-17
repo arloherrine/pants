@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import os
 import textwrap
@@ -34,6 +34,10 @@ class ConfluencePublish(Task):
              help='Attempt to open the published confluence wiki page in a browser.')
     register('--user', help='Confluence user name, defaults to unix user.')
 
+  @classmethod
+  def prepare(cls, options, round_manager):
+    round_manager.require('wiki_html')
+
   def __init__(self, *args, **kwargs):
     super(ConfluencePublish, self).__init__(*args, **kwargs)
 
@@ -45,9 +49,6 @@ class ConfluencePublish(Task):
     self.open = self.get_options().open
     self._wiki = None
     self.user = self.get_options().user
-
-  def prepare(self, round_manager):
-    round_manager.require('wiki_html')
 
   def wiki(self):
     raise NotImplementedError('Subclasses must provide the wiki target they are associated with')

@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import errno
 import hashlib
@@ -31,7 +31,7 @@ CacheKey = namedtuple('CacheKey', ['id', 'hash', 'num_chunking_units'])
 # Bump this to invalidate all existing keys in artifact caches across all pants deployments in the
 # world. Do this if you've made a change that invalidates existing artifacts, e.g.,  fixed a bug
 # that caused bad artifacts to be cached.
-GLOBAL_CACHE_KEY_GEN_VERSION = '6'
+GLOBAL_CACHE_KEY_GEN_VERSION = '7'
 
 
 class CacheKeyGenerator(object):
@@ -84,8 +84,11 @@ class CacheKeyGenerator(object):
       target_key = target.transitive_invalidation_hash(fingerprint_strategy)
     else:
       target_key = target.invalidation_hash(fingerprint_strategy)
-    full_key = '{target_key}_{key_suffix}'.format(target_key=target_key, key_suffix=key_suffix)
-    return CacheKey(target.id, full_key, target.num_chunking_units)
+    if target_key is not None:
+      full_key = '{target_key}_{key_suffix}'.format(target_key=target_key, key_suffix=key_suffix)
+      return CacheKey(target.id, full_key, target.num_chunking_units)
+    else:
+      return None
 
 
 # A persistent map from target set to cache key, which is a fingerprint of all

@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 from pants.backend.codegen.targets.java_antlr_library import JavaAntlrLibrary
 from pants.backend.codegen.targets.java_protobuf_library import JavaProtobufLibrary
@@ -43,22 +43,17 @@ def build_file_aliases():
 def register_goals():
   task(name='thrift', action=ApacheThriftGen).install('gen').with_description('Generate code.')
 
-  task(name='thrift-linter', action=ThriftLinter
-  ).install().with_description('Check thrift files for non-recommended usage patterns.')
+  task(name='thrift-linter', action=ThriftLinter).install().with_description(
+      'Check thrift files for non-recommended usage patterns.')
 
-  task(name='scrooge', dependencies=['bootstrap'], action=ScroogeGen).install('gen')
+  task(name='scrooge', action=ScroogeGen).install('gen')
 
   # TODO(Garrett Malmquist): 'protoc' depends on a nonlocal goal (imports is in the jvm register).
   # This should be cleaned up, with protobuf stuff moved to its own backend. (See John's comment on
   # RB 592).
-  task(name='protoc', dependencies=['imports'], action=ProtobufGen
-  ).install('gen')
+  task(name='protoc', action=ProtobufGen).install('gen')
 
-  task(name='antlr', dependencies=['bootstrap'], action=AntlrGen
-  ).install('gen')
-
+  task(name='antlr', action=AntlrGen).install('gen')
   task(name='ragel', action=RagelGen).install('gen')
-
   task(name='jaxb', action=JaxbGen).install('gen')
-
   task(name='wire', action=WireGen).install('gen')

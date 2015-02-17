@@ -2,11 +2,12 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import os
 
+from pants.backend.jvm.targets.annotation_processor import AnnotationProcessor
 from pants.backend.jvm.tasks.jvm_compile.analysis_tools import AnalysisTools
 from pants.backend.jvm.tasks.jvm_compile.java.jmake_analysis import JMakeAnalysis
 from pants.backend.jvm.tasks.jvm_compile.java.jmake_analysis_parser import JMakeAnalysisParser
@@ -46,12 +47,11 @@ _JMAKE_ERROR_CODES.update((256 + code, msg) for code, msg in _JMAKE_ERROR_CODES.
 class JavaCompile(JvmCompile):
   _language = 'java'
   _file_suffix = '.java'
-  _config_section = 'java-compile'
 
     # Well known metadata file to auto-register annotation processors with a java 1.6+ compiler
   _PROCESSOR_INFO_FILE = 'META-INF/services/javax.annotation.processing.Processor'
 
-  _JMAKE_MAIN = 'com.sun.tools.jmake.Main'
+  _JMAKE_MAIN = 'org.pantsbuild.jmake.Main'
 
   @classmethod
   def get_args_default(cls, bootstrap_option_values):
@@ -73,8 +73,10 @@ class JavaCompile(JvmCompile):
   @classmethod
   def register_options(cls, register):
     super(JavaCompile, cls).register_options(register)
-    register('--source', help='Provide source compatibility with this release.')
-    register('--target', help='Generate class files for this JVM version.')
+    register('--source', help='Provide source compatibility with this release.', advanced=True)
+    register('--target', help='Generate class files for this JVM version.', advanced=True)
+    cls.register_jvm_tool(register, 'jmake')
+    cls.register_jvm_tool(register, 'java-compiler')
 
   def __init__(self, *args, **kwargs):
     super(JavaCompile, self).__init__(*args, **kwargs)
@@ -84,28 +86,13 @@ class JavaCompile(JvmCompile):
 
     self._depfile = os.path.join(self._analysis_dir, 'global_depfile')
 
-    self._jmake_bootstrap_key = 'jmake'
-    self.register_jvm_tool_from_config(self._jmake_bootstrap_key, self.context.config,
-                                       ini_section='java-compile',
-                                       ini_key='jmake-bootstrap-tools',
-                                       default=['//:jmake'])
-
-    self._compiler_bootstrap_key = 'java-compiler'
-    self.register_jvm_tool_from_config(self._compiler_bootstrap_key, self.context.config,
-                                       ini_section='java-compile',
-                                       ini_key='compiler-bootstrap-tools',
-                                       default=['//:java-compiler'])
-
-  @property
-  def config_section(self):
-    return self._config_section
-
   def create_analysis_tools(self):
-    return AnalysisTools(self.context, JMakeAnalysisParser(self._classes_dir), JMakeAnalysis)
+    return AnalysisTools(self.context.java_home, self.ivy_cache_dir,
+                         JMakeAnalysisParser(self._classes_dir), JMakeAnalysis)
 
   def extra_products(self, target):
     ret = []
-    if target.is_apt and target.processors:
+    if isinstance(target, AnnotationProcessor) and target.processors:
       root = os.path.join(self._resources_dir, Target.maybe_readable_identify([target]))
       processor_info_file = os.path.join(root, JavaCompile._PROCESSOR_INFO_FILE)
       self._write_processor_info(processor_info_file, target.processors)
@@ -119,7 +106,7 @@ class JavaCompile(JvmCompile):
 
   def compile(self, args, classpath, sources, classes_output_dir, analysis_file):
     relative_classpath = relativize_paths(classpath, self._buildroot)
-    jmake_classpath = self.tool_classpath(self._jmake_bootstrap_key)
+    jmake_classpath = self.tool_classpath('jmake')
     args = [
       '-classpath', ':'.join(relative_classpath + [self._classes_dir]),
       '-d', self._classes_dir,
@@ -127,7 +114,7 @@ class JavaCompile(JvmCompile):
       '-pdb-text-format',
       ]
 
-    compiler_classpath = self.tool_classpath(self._compiler_bootstrap_key)
+    compiler_classpath = self.tool_classpath('java-compiler')
     args.extend([
       '-jcpath', ':'.join(compiler_classpath),
       '-jcmainclass', 'com.twitter.common.tools.Compiler',
@@ -161,7 +148,7 @@ class JavaCompile(JvmCompile):
     # This is distinct from the per-target ones we create in extra_products().
     all_processors = set()
     for target in relevant_targets:
-      if target.is_apt and target.processors:
+      if isinstance(target, AnnotationProcessor) and target.processors:
         all_processors.update(target.processors)
     processor_info_file = os.path.join(self._classes_dir, JavaCompile._PROCESSOR_INFO_FILE)
     if os.path.exists(processor_info_file):
@@ -174,4 +161,3 @@ class JavaCompile(JvmCompile):
     with safe_open(processor_info_file, 'w') as f:
       for processor in processors:
         f.write('%s\n' % processor.strip())
-

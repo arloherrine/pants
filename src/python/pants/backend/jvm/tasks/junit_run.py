@@ -2,18 +2,17 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-from abc import abstractmethod
-from collections import defaultdict, namedtuple
 import copy
 import fnmatch
 import os
 import sys
+from abc import abstractmethod
+from collections import defaultdict, namedtuple
 
 from twitter.common.collections import OrderedSet
-from twitter.common.dirutil import safe_delete, safe_rmtree
 
 from pants import binary_util
 from pants.backend.jvm.targets.java_tests import JavaTests as junit_tests
@@ -23,8 +22,9 @@ from pants.base.build_environment import get_buildroot
 from pants.base.exceptions import TaskError
 from pants.base.workunit import WorkUnit
 from pants.java.util import execute_java
-from pants.util.contextutil import temporary_file
-from pants.util.dirutil import safe_mkdir, safe_open
+from pants.util.contextutil import temporary_file_path
+from pants.util.dirutil import (relativize_paths, safe_delete, safe_mkdir, safe_open, safe_rmtree,
+                                touch)
 
 
 _CWD_NOT_PRESENT='CWD NOT PRESENT'
@@ -42,13 +42,14 @@ _CWD_NOT_PRESENT='CWD NOT PRESENT'
 # so it seems prefectly reasonable for them to have a reference to the task.
 # This trick just makes debugging harder, and requires extra work when a runner implementation
 # needs some new thing from the task.
+# TODO(ji): (responding to benjy's) IIRC, I was carrying the reference to the Task in very early
+# versions, and jsirois suggested that I switch to the current form.
 _TaskExports = namedtuple('_TaskExports',
                           ['classpath',
                            'task_options',
                            'jvm_options',
                            'args',
                            'confs',
-                           'get_base_classpath_for_target',
                            'register_jvm_tool',
                            'tool_classpath',
                            'workdir'])
@@ -65,8 +66,7 @@ class _JUnitRunner(object):
   The default behavior is to just run JUnit tests."""
 
   @classmethod
-  def register_options(cls, register):
-    _Coverage.register_options(register)
+  def register_options(cls, register, register_jvm_tool):
     register('--skip', action='store_true', help='Skip running junit.')
     register('--fail-fast', action='store_true',
              help='Fail fast on the first test failure in a suite.')
@@ -88,23 +88,11 @@ class _JUnitRunner(object):
              help='Redirect test output to files in .pants.d/test/junit. Implied by --xml-report.')
     register('--cwd', default=_CWD_NOT_PRESENT, nargs='?',
              help='Set the working directory. If no argument is passed, use the first target path.')
-
-  def register_jvm_tool(self, key, ini_section, ini_key, default):
-    tool = self._context.config.getlist(ini_section, ini_key, default)
-    self._task_exports.register_jvm_tool(key,
-                                         tool,
-                                         ini_section=ini_section,
-                                         ini_key=ini_key)
+    register_jvm_tool(register, 'junit')
 
   def __init__(self, task_exports, context):
     self._task_exports = task_exports
     self._context = context
-    self._junit_bootstrap_key = 'junit'
-    self.register_jvm_tool(key=self._junit_bootstrap_key,
-                           ini_section='junit-run',
-                           ini_key='junit-bootstrap-tools',
-                           default=['//:junit'])
-
     options = task_exports.task_options
     self._tests_to_run = options.test
     self._batch_size = options.batch_size
@@ -150,30 +138,31 @@ class _JUnitRunner(object):
     tests = list(self._get_tests_to_run() if self._tests_to_run
                  else self._calculate_tests_from_targets(java_tests_targets))
     if tests:
-      bootstrapped_cp = self._task_exports.tool_classpath(self._junit_bootstrap_key)
-      junit_classpath = self._task_exports.classpath(
-        cp=bootstrapped_cp,
-        confs=self._task_exports.confs,
-        exclusives_classpath=self._task_exports.get_base_classpath_for_target(java_tests_targets[0]))
+      bootstrapped_cp = self._task_exports.tool_classpath('junit')
+      junit_classpath = self._task_exports.classpath(cp=bootstrapped_cp, confs=self._task_exports.confs)
 
       self._context.release_lock()
       self.instrument(targets, tests, junit_classpath)
 
-      def report():
-        self.report(targets, tests, junit_classpath)
+      def _do_report(exception=None):
+        self.report(targets, tests, tests_failed_exception=exception)
       try:
         self.run(tests, junit_classpath, cwd=working_dir)
-      except TaskError:
-        report()
+        _do_report(exception=None)
+      except TaskError as e:
+        _do_report(exception=e)
         raise
-      else:
-        report()
 
   def instrument(self, targets, tests, junit_classpath):
     """Called from coverage classes. Run any code instrumentation needed.
 
-    Subclasses should override this if they need more work done."""
+    Subclasses should override this if they need more work done.
 
+    :param targets: an iterable that contains the targets to run tests for.
+    :param tests: an iterable that contains all the test class names
+      extracted from the testing targets.
+    :param junit_classpath: the classpath that the instrumation tool needs.
+    """
     pass
 
   def run(self, tests, junit_classpath, cwd=None):
@@ -184,16 +173,23 @@ class _JUnitRunner(object):
     :param tests: an iterable that contains all the test class names
       extracted from the testing targets.
     :param junit_classpath: the collective classpath value under which
-      the junit will be executed.
+      the junit tests will be executed.
     """
 
     self._run_tests(tests, junit_classpath, JUnitRun._MAIN, cwd=cwd)
 
-  def report(self, targets, tests, junit_classpath):
+  def report(self, targets, tests, tests_failed_exception):
     """Post-processing of any test output.
 
-    Subclasses should override this if they need anything done here."""
+    Subclasses should override this if they need anything done here.
 
+    :param targets: an iterable that contains the targets to run tests for.
+    :param tests: an iterable that contains all the test class names
+      extracted from the testing targets.
+    :param tests_failed_exception: if the run() method throws an exception,
+      pass that exception here. It is used to determine whether any partial
+      coverage should happen, if at all.
+    """
     pass
 
   def _run_tests(self, tests, classpath, main, extra_jvm_options=None, cwd=None):
@@ -218,7 +214,7 @@ class _JUnitRunner(object):
         if result != 0 and self._fail_fast:
           break
     if result != 0:
-      raise TaskError('java %s ... exited non-zero (%i)' % (main, result))
+      raise TaskError('java {0} ... exited non-zero ({1})'.format(main, result))
 
   def _partition(self, tests):
     stride = min(self._batch_size, len(tests))
@@ -250,7 +246,7 @@ class _JUnitRunner(object):
     if not source_products:
       # It's valid - if questionable - to have a source file with no classes when, for
       # example, the source file has all its code commented out.
-      self._context.log.warn('Source file %s generated no classes' % srcfile)
+      self._context.log.warn('Source file {0} generated no classes'.format(srcfile))
     else:
       for _, classes in source_products.rel_paths():
         for cls in classes:
@@ -276,7 +272,7 @@ class _Coverage(_JUnitRunner):
   """Base class for emma-like coverage processors. Do not instantiate."""
 
   @classmethod
-  def register_options(cls, register):
+  def register_options(cls, register, register_jvm_tool):
     register('--coverage-patterns', action='append',
              help='Restrict coverage measurement. Values are class name prefixes in dotted form '
                   'with ? and * wildcards. If preceded with a - the pattern is excluded. For '
@@ -291,6 +287,9 @@ class _Coverage(_JUnitRunner):
             help='Output an HTML coverage report.')
     register('--coverage-html-open', action='store_true',
              help='Open the generated HTML coverage report in a browser. Implies --coverage-html.')
+    register('--coverage-force', action='store_true',
+             help='Attempt to run the reporting phase of coverage even if tests failed '
+                  '(defaults to False, as otherwise the coverage results would be unreliable).')
 
   def __init__(self, task_exports, context):
     super(_Coverage, self).__init__(task_exports, context)
@@ -312,6 +311,7 @@ class _Coverage(_JUnitRunner):
     self._coverage_report_html_open = options.coverage_html_open
     self._coverage_report_html = self._coverage_report_html_open or options.coverage_html
     self._coverage_html_file = os.path.join(self._coverage_dir, 'html', 'index.html')
+    self._coverage_force = options.coverage_force
 
   @abstractmethod
   def instrument(self, targets, tests, junit_classpath):
@@ -322,7 +322,7 @@ class _Coverage(_JUnitRunner):
     pass
 
   @abstractmethod
-  def report(self, targets, tests, junit_classpath):
+  def report(self, targets, tests, tests_failed_exception):
     pass
 
   # Utility methods, called from subclasses
@@ -352,17 +352,13 @@ class _Coverage(_JUnitRunner):
 class Emma(_Coverage):
   """Class to run coverage tests with Emma."""
 
-  def __init__(self, task_exports, context):
-    super(Emma, self).__init__(task_exports, context)
-    self._emma_bootstrap_key = 'emma'
-    self.register_jvm_tool(self._emma_bootstrap_key,
-                           ini_section='junit-run',
-                           ini_key='emma-bootstrap-tools',
-                           default=['//:emma'])
+  @classmethod
+  def register_options(cls, register, register_jvm_tool):
+    register_jvm_tool(register, 'emma')
 
   def instrument(self, targets, tests, junit_classpath):
     safe_mkdir(self._coverage_instrument_dir, clean=True)
-    self._emma_classpath = self._task_exports.tool_classpath(self._emma_bootstrap_key)
+    self._emma_classpath = self._task_exports.tool_classpath('emma')
     with binary_util.safe_args(self.get_coverage_patterns(targets)) as patterns:
       args = [
         'instr',
@@ -378,8 +374,8 @@ class Emma(_Coverage):
                             workunit_factory=self._context.new_workunit,
                             workunit_name='emma-instrument')
       if result != 0:
-        raise TaskError("java %s ... exited non-zero (%i)"
-                        " 'failed to instrument'" % (main, result))
+        raise TaskError("java {0} ... exited non-zero ({1})"
+                        " 'failed to instrument'".format(main, result))
 
   def run(self, tests, junit_classpath, cwd=None):
     self._run_tests(tests,
@@ -388,7 +384,13 @@ class Emma(_Coverage):
                     extra_jvm_options=['-Demma.coverage.out.file={0}'.format(self._coverage_file)],
                     cwd=cwd)
 
-  def report(self, targets, tests, junit_classpath):
+  def report(self, targets, tests, tests_failed_exception=None):
+    if tests_failed_exception:
+      self._context.log.warn('Test failed: {0}'.format(str(tests_failed_exception)))
+      if self._coverage_force:
+        self._context.log.warn('Generating report even though tests failed')
+      else:
+        return
     args = [
       'report',
       '-in', self._coverage_metadata_file,
@@ -408,12 +410,12 @@ class Emma(_Coverage):
     sorting = ['-Dreport.sort', '+name,+class,+method,+block']
     if self._coverage_report_console:
       args.extend(['-r', 'txt',
-                   '-Dreport.txt.out.file=%s' % self._coverage_console_file] + sorting)
+                   '-Dreport.txt.out.file={0}'.format(self._coverage_console_file)] + sorting)
     if self._coverage_report_xml:
-      args.extend(['-r', 'xml', '-Dreport.xml.out.file=%s' % self._coverage_xml_file])
+      args.extend(['-r', 'xml', '-Dreport.xml.out.file={0}'.format(self._coverage_xml_file)])
     if self._coverage_report_html:
       args.extend(['-r', 'html',
-                   '-Dreport.html.out.file=%s' % self._coverage_html_file,
+                   '-Dreport.html.out.file={0}'.format(self._coverage_html_file),
                    '-Dreport.out.encoding=UTF-8'] + sorting)
 
     main = 'emma'
@@ -421,8 +423,8 @@ class Emma(_Coverage):
                           workunit_factory=self._context.new_workunit,
                           workunit_name='emma-report')
     if result != 0:
-      raise TaskError("java %s ... exited non-zero (%i)"
-                      " 'failed to generate code coverage reports'" % (main, result))
+      raise TaskError("java {0} ... exited non-zero ({1})"
+                      " 'failed to generate code coverage reports'".format(main, result))
 
     if self._coverage_report_console:
       with safe_open(self._coverage_console_file) as console_report:
@@ -434,14 +436,16 @@ class Emma(_Coverage):
 class Cobertura(_Coverage):
   """Class to run coverage tests with cobertura."""
 
+  @classmethod
+  def register_options(cls, register, register_jvm_tool):
+    register_jvm_tool(register, 'cobertura-instrument')
+    register_jvm_tool(register, 'cobertura-run')
+    register_jvm_tool(register, 'cobertura-report')
+
   def __init__(self, task_exports, context):
     super(Cobertura, self).__init__(task_exports, context)
-    self._cobertura_bootstrap_key = 'cobertura'
     self._coverage_datafile = os.path.join(self._coverage_dir, 'cobertura.ser')
-    self.register_jvm_tool(self._cobertura_bootstrap_key,
-                           ini_section='junit-run',
-                           ini_key='cobertura-bootstrap-tools',
-                           default=['//:cobertura'])
+    touch(self._coverage_datafile)
     self._rootdirs = defaultdict(OrderedSet)
     self._include_filters = []
     self._exclude_filters = []
@@ -450,9 +454,11 @@ class Cobertura(_Coverage):
         self._exclude_filters.append(filt[1:])
       else:
         self._include_filters.append(filt)
+    self._nothing_to_instrument = True
 
   def instrument(self, targets, tests, junit_classpath):
-    self._cobertura_classpath = self._task_exports.tool_classpath(self._cobertura_bootstrap_key)
+    cobertura_cp = self._task_exports.tool_classpath('cobertura-instrument')
+    aux_classpath = os.pathsep.join(relativize_paths(junit_classpath, get_buildroot()))
     safe_delete(self._coverage_datafile)
     classes_by_target = self._context.products.get_data('classes_by_target')
     for target in targets:
@@ -482,29 +488,38 @@ class Cobertura(_Coverage):
     for basedir, classes in self._rootdirs.items():
       if not classes:
         continue  # No point in running instrumentation if there is nothing to instrument!
+      self._nothing_to_instrument = False
       args = [
         '--basedir',
         basedir,
         '--datafile',
         self._coverage_datafile,
+        '--auxClasspath',
+        aux_classpath,
         ]
-      with temporary_file() as fd:
-        fd.write('\n'.join(classes) + '\n')
+      with temporary_file_path(cleanup=False) as instrumented_classes_file:
+        with file(instrumented_classes_file, 'wb') as icf:
+          icf.write(('\n'.join(classes) + '\n').encode('utf-8'))
+        self._context.log.debug('instrumented classes in {0}'.format(instrumented_classes_file))
         args.append('--listOfFilesToInstrument')
-        args.append(fd.name)
+        args.append(instrumented_classes_file)
         main = 'net.sourceforge.cobertura.instrument.InstrumentMain'
-        result = execute_java(classpath=self._cobertura_classpath + junit_classpath,
+        result = execute_java(classpath=cobertura_cp,
                               main=main,
                               args=args,
                               workunit_factory=self._context.new_workunit,
                               workunit_name='cobertura-instrument')
       if result != 0:
-        raise TaskError("java %s ... exited non-zero (%i)"
-                        " 'failed to instrument'" % (main, result))
+        raise TaskError("java {0} ... exited non-zero ({1})"
+                        " 'failed to instrument'".format(main, result))
 
   def run(self, tests, junit_classpath, cwd=None):
+    if self._nothing_to_instrument:
+      self._context.log.warn('Nothing found to instrument, skipping tests...')
+      return
+    cobertura_cp = self._task_exports.tool_classpath('cobertura-run')
     self._run_tests(tests,
-                    self._cobertura_classpath + junit_classpath,
+                    cobertura_cp + junit_classpath,
                     JUnitRun._MAIN,
                     extra_jvm_options=['-Dnet.sourceforge.cobertura.datafile=' + self._coverage_datafile],
                     cwd=cwd)
@@ -521,13 +536,23 @@ class Cobertura(_Coverage):
             if source_by_class.get(product):
               if source_by_class.get(product) != source_file:
                 self._context.log.warn(
-                  'Inconsistency finding source for class %s: already had %s, also found %s',
-                  (product, source_by_class.get(product), source_file))
+                  'Inconsistency finding source for class {0}: already had {1}, also found {2}'
+                  .format(product, source_by_class.get(product), source_file))
             else:
               source_by_class[product] = source_file
     return source_by_class
 
-  def report(self, targets, tests, junit_classpath):
+  def report(self, targets, tests, tests_failed_exception=None):
+    if self._nothing_to_instrument:
+      self._context.log.warn('Nothing found to instrument, skipping report...')
+      return
+    if tests_failed_exception:
+      self._context.log.warn('Test failed: {0}'.format(tests_failed_exception))
+      if self._coverage_force:
+        self._context.log.warn('Generating report even though tests failed.')
+      else:
+        return
+    cobertura_cp = self._task_exports.tool_classpath('cobertura-report')
     # Link files in the real source tree to files named using the classname.
     # Do not include class file names containing '$', as these will always have
     # a corresponding $-less class file, and they all point back to the same
@@ -564,10 +589,9 @@ class Cobertura(_Coverage):
         except OSError as e:
           # These warnings appear when source files contain multiple classes.
           self._context.log.warn(
-            'Could not symlink %s to %s: %s' %
-            (source_file, fake_source_file, e))
+            'Could not symlink {0} to {1}: {2}'.format(source_file, fake_source_file, e))
       else:
-        self._context.log.error('class %s does not exist in a source file!' % cls)
+        self._context.log.error('class {0} does not exist in a source file!'.format(cls))
     report_formats = []
     if self._coverage_report_xml:
       report_formats.append('xml')
@@ -586,14 +610,14 @@ class Cobertura(_Coverage):
         report_format,
         ]
       main = 'net.sourceforge.cobertura.reporting.ReportMain'
-      result = execute_java(classpath=self._cobertura_classpath,
+      result = execute_java(classpath=cobertura_cp,
                             main=main,
                             args=args,
                             workunit_factory=self._context.new_workunit,
                             workunit_name='cobertura-report-' + report_format)
       if result != 0:
-        raise TaskError("java %s ... exited non-zero (%i)"
-                        " 'failed to report'" % (main, result))
+        raise TaskError("java {0} ... exited non-zero ({1})"
+                        " 'failed to report'".format(main, result))
 
 
 class JUnitRun(JvmTask, JvmToolTaskMixin):
@@ -602,10 +626,20 @@ class JUnitRun(JvmTask, JvmToolTaskMixin):
   @classmethod
   def register_options(cls, register):
     super(JUnitRun, cls).register_options(register)
-    _JUnitRunner.register_options(register)
+    # TODO: Yuck, but can't be helped until we refactor the _JUnitRunner/_TaskExports mechanism.
+    for c in [_JUnitRunner, _Coverage, Emma, Cobertura]:
+      c.register_options(register, cls.register_jvm_tool)
     register('--coverage', action='store_true', help='Collect code coverage data.')
     register('--coverage-processor', default='emma', help='Which coverage subsystem to use.')
 
+  @classmethod
+  def prepare(cls, options, round_manager):
+    super(JUnitRun, cls).prepare(options, round_manager)
+    round_manager.require_data('resources_by_target')
+
+    # List of FQCN, FQCN#method, sourcefile or sourcefile#method.
+    round_manager.require_data('classes_by_target')
+    round_manager.require_data('classes_by_source')
 
   def __init__(self, *args, **kwargs):
     super(JUnitRun, self).__init__(*args, **kwargs)
@@ -615,7 +649,6 @@ class JUnitRun(JvmTask, JvmToolTaskMixin):
                                 jvm_options=self.jvm_options,
                                 args=self.args,
                                 confs=self.confs,
-                                get_base_classpath_for_target=self.get_base_classpath_for_target,
                                 register_jvm_tool=self.register_jvm_tool,
                                 tool_classpath=self.tool_classpath,
                                 workdir=self.workdir)
@@ -628,17 +661,9 @@ class JUnitRun(JvmTask, JvmToolTaskMixin):
       elif coverage_processor == 'cobertura':
         self._runner = Cobertura(task_exports, self.context)
       else:
-        raise TaskError('unknown coverage processor %s' % coverage_processor)
+        raise TaskError('unknown coverage processor {0}'.format(coverage_processor))
     else:
       self._runner = _JUnitRunner(task_exports, self.context)
-
-  def prepare(self, round_manager):
-    super(JUnitRun, self).prepare(round_manager)
-    round_manager.require_data('resources_by_target')
-
-    # List of FQCN, FQCN#method, sourcefile or sourcefile#method.
-    round_manager.require_data('classes_by_target')
-    round_manager.require_data('classes_by_source')
 
   def execute(self):
     if not self.get_options().skip:

@@ -2,14 +2,14 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-from collections import defaultdict, namedtuple
 import errno
 import os
 import re
 import subprocess
+from collections import defaultdict, namedtuple
 
 from twitter.common import log
 from twitter.common.collections import OrderedSet
@@ -26,6 +26,9 @@ from pants.base.exceptions import TaskError
 from pants.base.target import Target
 from pants.thrift_util import calculate_compile_roots, select_thrift_binary
 from pants.util.dirutil import safe_mkdir, safe_walk
+
+
+INCLUDE_RE = re.compile(r'include (?:"(.*?)"|\'(.*?)\')')
 
 
 def _copytree(from_base, to_base):
@@ -74,14 +77,26 @@ class ApacheThriftGen(CodeGen):
       if self.context.products.isrequired(lang):
         self.gen_langs.add(lang)
 
-    self.thrift_binary = select_thrift_binary(self.context.config,
-                                              version=self.get_options().version)
-
-    self.defaults = JavaThriftLibrary.Defaults(self.context.config)
-
     # TODO(pl): This is broken because of how __init__.py files are generated/cached
     # for combined python thrift packages.
-    # self.setup_artifact_cache_from_config(config_section='thrift-gen')
+    # self.setup_artifact_cache()
+
+  _thrift_binary = None
+  @property
+  def thrift_binary(self):
+    if self._thrift_binary is None:
+      self._thrift_binary = select_thrift_binary(
+        self.context.config,
+        version=self.get_options().version
+      )
+    return self._thrift_binary
+
+  _defaults = None
+  @property
+  def defaults(self):
+    if self._defaults is None:
+      self._defaults = JavaThriftLibrary.Defaults(self.context.config)
+    return self._defaults
 
   def create_geninfo(self, key):
     gen_info = self.context.config.getdict('thrift-gen', key)
@@ -161,12 +176,13 @@ class ApacheThriftGen(CodeGen):
       # TODO(John Sirois): file paths should be normalized early on and uniformly, fix the need to
       # relpath here at all.
       relsource = os.path.relpath(source, get_buildroot())
+
       outdir = os.path.join(self.session_dir, '.'.join(relsource.split(os.path.sep)))
       safe_mkdir(outdir)
 
       cmd = args[:]
       cmd.extend(('-o', outdir))
-      cmd.append(source)
+      cmd.append(relsource)
       log.debug('Executing: %s' % ' '.join(cmd))
       sessions.append(self.ThriftSession(outdir, cmd, subprocess.Popen(cmd)))
 
@@ -279,7 +295,7 @@ def calculate_python_genfiles(namespace, types):
   yield path('__init__')
   if 'const' in types:
     yield path('constants')
-  if set(['enum', 'exception', 'struct', 'union']) & set(types.keys()):
+  if 'const' in types or set(['enum', 'exception', 'struct', 'union']) & set(types.keys()):
     yield path('ttypes')
   for service in types['service']:
     yield path(service)

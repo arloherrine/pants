@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import signal
 
@@ -12,6 +12,7 @@ from pex.pex import PEX
 from pants.backend.python.python_chroot import PythonChroot
 from pants.backend.python.targets.python_binary import PythonBinary
 from pants.backend.python.tasks.python_task import PythonTask
+from pants.base.exceptions import TaskError
 from pants.base.workunit import WorkUnit
 
 
@@ -37,11 +38,11 @@ class PythonRun(PythonTask):
       interpreter = self.select_interpreter_for_targets(self.context.targets())
       with self.temporary_pex_builder(interpreter=interpreter, pex_info=binary.pexinfo) as builder:
         chroot = PythonChroot(
+          context=self.context,
           targets=[binary],
           builder=builder,
           platforms=binary.platforms,
-          interpreter=interpreter,
-          conn_timeout=self.conn_timeout)
+          interpreter=interpreter)
 
         chroot.dump()
         builder.freeze()
@@ -53,9 +54,12 @@ class PythonRun(PythonTask):
           try:
             result = po.wait()
             if result != 0:
-              raise TaskError('python {args} ... exited non-zero ({code})' %
-                              dict(args=args, code=result),
-                              exit_code=result)
+              msg = '{interpreter} {entry_point} {args} ... exited non-zero ({code})'.format(
+                        interpreter=interpreter.binary,
+                        entry_point=binary.entry_point,
+                        args=' '.join(args),
+                        code=result)
+              raise TaskError(msg, exit_code=result)
           except KeyboardInterrupt:
             po.send_signal(signal.SIGINT)
             raise

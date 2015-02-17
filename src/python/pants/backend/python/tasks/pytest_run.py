@@ -2,16 +2,16 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import os
 
-from pants.base.exceptions import TaskError
-from pants.base.workunit import WorkUnit
-from pants.backend.python.test_builder import PythonTestBuilder
 from pants.backend.python.targets.python_tests import PythonTests
 from pants.backend.python.tasks.python_task import PythonTask
+from pants.backend.python.test_builder import PythonTestBuilder
+from pants.base.exceptions import TaskError
+from pants.base.workunit import WorkUnit
 from pants.util.contextutil import environment_as
 from pants.util.strutil import safe_shlex_split
 
@@ -46,10 +46,10 @@ class PytestRun(PythonTask):
       args = [] if self.get_options().no_colors else ['--color', 'yes']
       for options in self.get_options().options + self.get_passthru_args():
         args.extend(safe_shlex_split(options))
-      test_builder = PythonTestBuilder(targets=test_targets,
+      test_builder = PythonTestBuilder(context=self.context,
+                                       targets=test_targets,
                                        args=args,
                                        interpreter=self.interpreter,
-                                       conn_timeout=self.conn_timeout,
                                        fast=self.get_options().fast,
                                        debug=debug)
       with self.context.new_workunit(name='run',

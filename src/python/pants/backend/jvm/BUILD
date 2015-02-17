@@ -18,16 +18,14 @@ python_library(
   name = 'plugin',
   sources = ['__init__.py', 'register.py'],
   dependencies = [
+    ':artifact',
+    ':repository',
     'src/python/pants/backend/core/tasks:group_task',
     'src/python/pants/backend/jvm/targets:all',
     'src/python/pants/backend/jvm/tasks:all',
     'src/python/pants/base:build_file_aliases',
     'src/python/pants/goal',
     'src/python/pants/goal:task_registrar',
-    ':artifact',
-    ':ivy_utils',
-    ':jvm_tool_bootstrapper',
-    ':repository',
   ],
 )
 
@@ -37,22 +35,14 @@ python_library(
   resources = globs('tasks/templates/ivy_resolve/*.mustache'),
   dependencies = [
     '3rdparty/python/twitter/commons:twitter.common.collections',
+    'src/python/pants/backend/jvm/targets:jvm',
     'src/python/pants/base:build_environment',
     'src/python/pants/base:exceptions',
     'src/python/pants/base:generator',
     'src/python/pants/base:revision',
     'src/python/pants/base:target',
     'src/python/pants/ivy',
-    'src/python/pants/java:util',
     'src/python/pants/util:dirutil',
-  ],
-)
-
-python_library(
-  name = 'jvm_tool_bootstrapper',
-  sources = ['jvm_tool_bootstrapper.py'],
-  dependencies = [
-    'src/python/pants/base:exceptions',
   ],
 )
 

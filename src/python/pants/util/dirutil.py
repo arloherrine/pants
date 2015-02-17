@@ -2,17 +2,17 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import atexit
-from collections import defaultdict
 import errno
 import os
 import shutil
 import stat
 import tempfile
 import threading
+from collections import defaultdict
 
 from pants.util.strutil import ensure_text
 
@@ -141,10 +141,13 @@ def chmod_plus_x(path):
 
 
 def relativize_path(path, rootdir):
-  real_path = os.path.realpath(path)
-  relative_path = os.path.relpath(real_path, rootdir)
-  final_path = relative_path if len(relative_path) < len(real_path) else real_path
-  return final_path
+  # Note that we can't test for length and return the shorter of the two, because we need these
+  # paths to be stable across systems (e.g., because they get embedded in analysis files),
+  # and this choice might be inconsistent across systems. So we assume the relpath is always
+  # shorter. We relativize because of a known case of very long full path prefixes on Mesos,
+  # so this seems like the right heuristic.
+  # Note also that we mustn't call realpath on the path - we need to preserve the symlink structure.
+  return os.path.relpath(path, rootdir)
 
 
 # When running pants under mesos/aurora, the sandbox pathname can be very long. Since it gets

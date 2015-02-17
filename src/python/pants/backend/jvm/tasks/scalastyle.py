@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import os
 import re
@@ -49,13 +49,11 @@ class Scalastyle(NailgunTask, JvmToolTaskMixin):
   def register_options(cls, register):
     super(Scalastyle, cls).register_options(register)
     register('--skip', action='store_true', help='Skip scalastyle.')
+    cls.register_jvm_tool(register, 'scalastyle')
 
   def __init__(self, *args, **kwargs):
     super(Scalastyle, self).__init__(*args, **kwargs)
-
     self._initialize_config()
-    self._scalastyle_bootstrap_key = 'scalastyle'
-    self.register_jvm_tool(self._scalastyle_bootstrap_key, ['//:scalastyle'])
 
   @property
   def config_section(self):
@@ -164,7 +162,7 @@ class Scalastyle(NailgunTask, JvmToolTaskMixin):
 
     if scala_sources:
       def call(srcs):
-        cp = self.tool_classpath(self._scalastyle_bootstrap_key)
+        cp = self.tool_classpath('scalastyle')
         return self.runjava(classpath=cp,
                             main=self._MAIN,
                             args=['-c', self._scalastyle_config] + srcs)

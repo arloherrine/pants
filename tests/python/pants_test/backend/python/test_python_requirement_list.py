@@ -12,6 +12,7 @@ from pants.backend.python.targets.python_requirement_library import PythonRequir
 from pants.base.build_file_aliases import BuildFileAliases
 from pants_test.base_test import BaseTest
 
+
 class PythonRequirementListTest(BaseTest):
   @property
   def alias_groups(self):

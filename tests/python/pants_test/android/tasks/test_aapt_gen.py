@@ -2,18 +2,17 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
-
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import os
-import unittest2 as unittest
+import unittest
 
 from pants.backend.android.tasks.aapt_gen import AaptGen
 
 
 class AaptGenCalculateGenfilesTest(unittest.TestCase):
-  """Test the package translation methods in pants.backend.android.aapt_gen."""
+  """Test the package translation methods in pants.backend.android.tasks.aapt_gen."""
 
   def assert_files(self, package, expected_file):
     self.assertEqual(AaptGen._calculate_genfile(package), expected_file)

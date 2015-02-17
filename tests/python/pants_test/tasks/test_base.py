@@ -2,28 +2,28 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import os
 import subprocess
 from contextlib import closing
-
 from StringIO import StringIO
 
 from twitter.common.collections import maybe_list
 
-from pants.backend.core.tasks.task import Task
-
 from pants.backend.core.tasks.console_task import ConsoleTask
+from pants.backend.core.tasks.task import Task
 from pants.base.cmd_line_spec_parser import CmdLineSpecParser
+from pants.base.config import Config
 from pants.base.target import Target
 from pants.goal.context import Context
 from pants.goal.goal import Goal
-from pants.option.bootstrap_options import register_bootstrap_options
+from pants.option.global_options import register_global_options
 from pants.option.options import Options
-from pants_test.base_test import BaseTest
+from pants.option.options_bootstrapper import OptionsBootstrapper, register_bootstrap_options
 from pants_test.base.context_utils import create_config, create_run_tracker
+from pants_test.base_test import BaseTest
 
 
 def is_exe(name):
@@ -38,6 +38,13 @@ class TaskTest(BaseTest):
   def task_type(cls):
     """Subclasses must return the type of the ConsoleTask subclass under test."""
     raise NotImplementedError()
+
+  def setUp(self):
+    super(TaskTest, self).setUp()
+
+    # The prepare_task method engages a series of objects that use option values so we ensure they
+    # are uniformly set here before calls to prepare_task occur in test methods.
+    Config.reset_default_bootstrap_option_values()
 
   def prepare_task(self,
                    config=None,
@@ -64,17 +71,26 @@ class TaskTest(BaseTest):
     config = create_config(config or '')
     workdir = os.path.join(config.getdefault('pants_workdir'), 'test', task_type.__name__)
 
-    new_options = Options(env={}, config=config, known_scopes=['', 'test'], args=args or [])
+    bootstrap_options = OptionsBootstrapper().get_bootstrap_options()
+
+    options = Options(env={}, config=config, known_scopes=['', 'test'], args=args or [])
     # A lot of basic code uses these options, so always register them.
-    register_bootstrap_options(new_options.register_global)
+    register_bootstrap_options(options.register_global)
+
+    # We need to wrap register_global (can't set .bootstrap attr on the bound instancemethod).
+    def register_global_wrapper(*args, **kwargs):
+      return options.register_global(*args, **kwargs)
+
+    register_global_wrapper.bootstrap = bootstrap_options.for_global_scope()
+    register_global_options(register_global_wrapper)
 
     task_type.options_scope = 'test'
-    task_type.register_options_on_scope(new_options)
+    task_type.register_options_on_scope(options)
 
     run_tracker = create_run_tracker()
 
     context = Context(config,
-                      new_options,
+                      options,
                       run_tracker,
                       targets or [],
                       build_graph=build_graph,

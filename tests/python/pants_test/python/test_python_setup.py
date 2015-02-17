@@ -2,12 +2,12 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
+import os
 from collections import OrderedDict
 from contextlib import contextmanager
-import os
 
 from mock import MagicMock, Mock, call
 from twitter.common.collections import OrderedSet
@@ -58,12 +58,10 @@ class TestPythonSetup(TaskTestBase):
 
   @contextmanager
   def run_execute(self, target, recursive=False):
-    self.set_new_options(recursive=recursive, interpreter=[])
+    self.set_options(recursive=recursive, interpreter=[])
     context = self.context(target_roots=[target])
     workdir = safe_mkdtemp(dir=self.build_root)
     setup_py = self.create_task(context, workdir)
-    setup_py.old_options = MagicMock()
-    setup_py.old_options.recursive = recursive
     setup_py.run_one = MagicMock()
     setup_py.run_one.return_value = True
     setup_py.execute()

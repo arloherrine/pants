@@ -2,19 +2,21 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import sys
+
+from pants.base.build_graph import sort_targets
+from pants.base.build_invalidator import BuildInvalidator, CacheKeyGenerator
+from pants.base.target import Target
+
 
 try:
   import cPickle as pickle
 except ImportError:
   import pickle
 
-from pants.base.build_graph import sort_targets
-from pants.base.build_invalidator import BuildInvalidator, CacheKeyGenerator
-from pants.base.target import Target
 
 
 class VersionedTargetSet(object):
@@ -78,11 +80,17 @@ class VersionedTarget(VersionedTargetSet):
     self.id = target.id
 
 
-# The result of calling check() on a CacheManager.
-# Each member is a list of VersionedTargetSet objects in topological order.
-# Tasks may need to perform no, some or all operations on either of these, depending on how they
-# are implemented.
+
 class InvalidationCheck(object):
+  """The result of calling check() on a CacheManager.
+
+  Each member is a list of VersionedTargetSet objects.  Sorting of the targets depends
+  on how you order the InvalidationCheck from the InvalidationCacheManager.
+
+  Tasks may need to perform no, some or all operations on either of these, depending on how they
+  are implemented.
+  """
+
   @classmethod
   def _partition_versioned_targets(cls, versioned_targets, partition_size_hint, vt_colors=None):
     """Groups versioned targets so that each group has roughly the same number of sources.
@@ -208,63 +216,50 @@ class InvalidationCacheManager(object):
   def check(self,
             targets,
             partition_size_hint=None,
-            target_colors=None):
+            target_colors=None,
+            topological_order=False):
     """Checks whether each of the targets has changed and invalidates it if so.
 
     Returns a list of VersionedTargetSet objects (either valid or invalid). The returned sets
-    'cover' the input targets, possibly partitioning them, and are in topological order.
-    The caller can inspect these in order and, e.g., rebuild the invalid ones.
+    'cover' the input targets, possibly partitioning them, with one caveat: if the FingerprintStrategy
+    opted out of fingerprinting a target because it doesn't contribute to invalidation, then that
+    target will be excluded from all_vts, invalid_vts, and the partitioned VTS.
+
+    Callers can inspect these vts and rebuild the invalid ones, for example.
 
     If target_colors is specified, it must be a map from Target -> opaque 'color' values.
     Two Targets will be in the same partition only if they have the same color.
     """
-    all_vts = self._sort_and_validate_targets(targets)
+    all_vts = self._wrap_targets(targets, topological_order=topological_order)
     invalid_vts = filter(lambda vt: not vt.valid, all_vts)
     return InvalidationCheck(all_vts, invalid_vts, partition_size_hint, target_colors)
 
-  def _sort_and_validate_targets(self, targets):
-    """Validate each target.
+  def _wrap_targets(self, targets, topological_order=False):
+    """Wrap targets and their computed cache keys in VersionedTargets.
 
-    Returns a topologically ordered set of VersionedTargets, each representing one input target.
+    If the FingerprintStrategy opted out of providing a fingerprint for a target, that target will not
+    have an associated VersionedTarget returned.
+
+    Returns a list of VersionedTargets, each representing one input target.
     """
-    # We must check the targets in this order, to ensure correctness if invalidate_dependents=True,
-    # since we use earlier cache keys to compute later cache keys in this case.
-    ordered_targets = self._order_target_list(targets)
-
-    # This will be a list of VersionedTargets that correspond to @targets.
-    versioned_targets = []
-
-    # This will be a mapping from each target to its corresponding VersionedTarget.
-    versioned_targets_by_target = {}
-
-    # Map from id to current fingerprint of the target with that id. We update this as we iterate,
-    # in topological order, so when handling a target, this will already contain all its deps (in
-    # this round).
-    id_to_hash = {}
-
-    for target in ordered_targets:
-      cache_key = self._key_for(target, transitive=self._invalidate_dependents)
-      id_to_hash[target.id] = cache_key.hash
-
-      # Create a VersionedTarget corresponding to @target.
-      versioned_target = VersionedTarget(self, target, cache_key)
-
-      # Add the new VersionedTarget to the list of computed VersionedTargets.
-      versioned_targets.append(versioned_target)
-
-    return versioned_targets
+    def vt_iter():
+      if topological_order:
+        sorted_targets = [t for t in reversed(sort_targets(targets)) if t in targets]
+      else:
+        sorted_targets = sorted(targets)
+      for target in sorted_targets:
+        target_key = self._key_for(target)
+        if target_key is not None:
+          yield VersionedTarget(self, target, target_key)
+    return list(vt_iter())
 
   def needs_update(self, cache_key):
     return self._invalidator.needs_update(cache_key)
 
-  def _order_target_list(self, targets):
-    """Orders the targets topologically, from least to most dependent."""
-    return filter(targets.__contains__, reversed(sort_targets(targets)))
-
-  def _key_for(self, target, transitive=False):
+  def _key_for(self, target):
     try:
       return self._cache_key_generator.key_for_target(target,
-                                                      transitive=transitive,
+                                                      transitive=self._invalidate_dependents,
                                                       fingerprint_strategy=self._fingerprint_strategy)
     except Exception as e:
       # This is a catch-all for problems we haven't caught up with and given a better diagnostic.

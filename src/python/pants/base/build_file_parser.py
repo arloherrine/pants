@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import logging
 
@@ -13,6 +13,7 @@ from pants.base.build_file import BuildFile
 
 
 logger = logging.getLogger(__name__)
+
 
 # Note: Significant effort has been made to keep the types BuildFile, BuildGraph, Address, and
 # Target separated appropriately.  The BulidFileParser is intended to have knowledge of just
@@ -57,20 +58,13 @@ class BuildFileParser(object):
     self._root_dir = root_dir
     self.run_tracker = run_tracker
 
+  @property
+  def root_dir(self):
+    return self._root_dir
+
   def registered_aliases(self):
     """Returns a copy of the registered build file aliases this build file parser uses."""
     return self._build_configuration.registered_aliases()
-
-  def parse_spec(self, spec, relative_to=None, context=None):
-    try:
-      return parse_spec(spec, relative_to=relative_to)
-    except ValueError as e:
-      if context:
-        msg = ('Invalid address {spec} found while '
-               'parsing {context}: {exc}').format(spec=spec, context=context, exc=e)
-      else:
-        msg = 'Invalid address {spec}: {exc}'.format(spec=spec, exc=e)
-      raise self.InvalidAddressException(msg)
 
   def address_map_from_spec_path(self, spec_path):
     try:

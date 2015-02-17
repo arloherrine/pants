@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 from pex.pex import PEX
 
@@ -45,11 +45,11 @@ class PythonRepl(PythonTask):
       with self.temporary_pex_builder(interpreter=interpreter) as builder:
         builder.set_entry_point(entry_point)
         chroot = PythonChroot(
+          context=self.context,
           targets=targets,
           extra_requirements=extra_requirements,
           builder=builder,
-          interpreter=interpreter,
-          conn_timeout=self.conn_timeout)
+          interpreter=interpreter)
 
         chroot.dump()
         builder.freeze()

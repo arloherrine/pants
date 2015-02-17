@@ -2,9 +2,11 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
+import errno
+import httplib
 import json
 import os
 import sys
@@ -13,8 +15,6 @@ import time
 import urllib
 from contextlib import contextmanager
 from urlparse import urlparse
-
-import httplib
 
 from pants.base.config import Config
 from pants.base.run_info import RunInfo
@@ -87,9 +87,15 @@ class RunTracker(object):
 
     # Create a 'latest' symlink, after we add_infos, so we're guaranteed that the file exists.
     link_to_latest = os.path.join(os.path.dirname(self.info_dir), 'latest')
-    if os.path.lexists(link_to_latest):
-      os.unlink(link_to_latest)
-    os.symlink(self.info_dir, link_to_latest)
+
+    try:
+      if os.path.lexists(link_to_latest):
+        os.unlink(link_to_latest)
+      os.symlink(self.info_dir, link_to_latest)
+    except OSError as e:
+      # Another run may beat us to deletion or creation.
+      if not (e.errno == errno.EEXIST or e.errno == errno.ENOENT):
+        raise
 
     # Time spent in a workunit, including its children.
     self.cumulative_timings = AggregatedTimings(os.path.join(self.info_dir, 'cumulative_timings'))

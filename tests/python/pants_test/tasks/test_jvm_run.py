@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import os
 
@@ -26,9 +26,9 @@ class JvmRunTest(TaskTest):
                                 build_graph=self.build_graph)
 
     round_manager = RoundManager(jvm_run.context)
-    jvm_run.prepare(round_manager)
+    jvm_run.prepare(self.options, round_manager)
 
-    self.populate_exclusive_groups(context=jvm_run.context, classpaths=['bob', 'fred'])
+    self.populate_compile_classpath(context=jvm_run.context, classpath=['bob', 'fred'])
 
     with temporary_dir() as pwd:
       with pushd(pwd):

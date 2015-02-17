@@ -2,16 +2,18 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import logging
+
 import six
 
 from pants.backend.jvm.targets.exportable_jvm_library import ExportableJvmLibrary
-
+from pants.backend.jvm.targets.jar_library import JarLibrary
 from pants.base.payload import Payload
 from pants.base.payload_field import PrimitiveField
+
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +24,12 @@ class JavaProtobufLibrary(ExportableJvmLibrary):
   def __init__(self, payload=None, buildflags=None, imports=None, **kwargs):
     """
     :param buildflags: Unused, and will be removed in a future release.
-    :param imports: List of addresses of `jar_library <#jar_library>`_
+    :param list imports: List of addresses of `jar_library <#jar_library>`_
       targets which contain .proto definitions.
     """
     payload = payload or Payload()
+    # TODO(Eric Ayers): The target needs to incorporate the settings of --gen-protoc-version
+    # and --gen-protoc-plugins into the fingerprint.
     payload.add_fields({
       'raw_imports': PrimitiveField(imports or ())
     })
@@ -53,5 +57,7 @@ class JavaProtobufLibrary(ExportableJvmLibrary):
   def imports(self):
     """Returns the set of JarDependency instances to be included when compiling this target."""
     if self._imports is None:
-      self._imports = self.to_jar_dependencies(self.payload.raw_imports)
+      self._imports = JarLibrary.to_jar_dependencies(self.address,
+                                                     self.payload.raw_imports,
+                                                     self._build_graph)
     return self._imports

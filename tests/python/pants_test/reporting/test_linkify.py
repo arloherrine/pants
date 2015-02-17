@@ -2,19 +2,20 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import os
 import shutil
 import tempfile
-import unittest2 as unittest
+import unittest
 
 from pants.reporting.linkify import linkify
 
 
 def ensure_dir_exists(path):
   os.makedirs(path)
+
 
 def ensure_file_exists(path):
   ensure_dir_exists(os.path.dirname(path))

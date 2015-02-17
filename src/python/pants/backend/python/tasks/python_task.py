@@ -2,11 +2,11 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-from contextlib import contextmanager
 import tempfile
+from contextlib import contextmanager
 
 from pex.pex_builder import PEXBuilder
 from twitter.common.collections import OrderedSet
@@ -17,17 +17,8 @@ from pants.base.exceptions import TaskError
 
 
 class PythonTask(Task):
-  @classmethod
-  def register_options(cls, register):
-    super(PythonTask, cls).register_options(register)
-    register('--timeout', type=int, default=0,
-             help='Number of seconds to wait for http connections.')
-
   def __init__(self, *args, **kwargs):
     super(PythonTask, self).__init__(*args, **kwargs)
-    self.conn_timeout = (self.get_options().timeout or
-                         self.context.config.getdefault('connection_timeout'))
-
     self._compatibilities = self.get_options().interpreter or [b'']
     self._interpreter_cache = None
     self._interpreter = None
@@ -96,5 +87,3 @@ class PythonTask(Task):
     builder = PEXBuilder(path=path, interpreter=interpreter, pex_info=pex_info)
     yield builder
     builder.chroot().delete()
-
-

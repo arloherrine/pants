@@ -2,27 +2,29 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-from contextlib import contextmanager
+import os
 import SimpleHTTPServer
 import SocketServer
-import os
-import unittest2 as unittest
+import unittest
+from contextlib import contextmanager
 from threading import Thread
 
 from pants.base.build_invalidator import CacheKey
-from pants.cache.artifact_cache import call_use_cached_files, call_insert
-from pants.cache.cache_setup import (create_artifact_cache, select_best_url, EmptyCacheSpecError,
-                                     LocalCacheSpecRequiredError, CacheSpecFormatError,
-                                     InvalidCacheSpecError, RemoteCacheSpecRequiredError)
+from pants.cache.artifact_cache import call_insert, call_use_cached_files
+from pants.cache.cache_setup import (CacheSpecFormatError, EmptyCacheSpecError,
+                                     InvalidCacheSpecError, LocalCacheSpecRequiredError,
+                                     RemoteCacheSpecRequiredError, create_artifact_cache,
+                                     select_best_url)
 from pants.cache.local_artifact_cache import LocalArtifactCache, TempLocalArtifactCache
 from pants.cache.restful_artifact_cache import InvalidRESTfulCacheProtoError, RESTfulArtifactCache
 from pants.util.contextutil import pushd, temporary_dir, temporary_file
 from pants.util.dirutil import safe_mkdir
-from pants_test.testutils.mock_logger import MockLogger
 from pants_test.base.context_utils import create_context
+from pants_test.testutils.mock_logger import MockLogger
+
 
 class MockPinger(object):
   def __init__(self, hosts_to_times):
@@ -30,6 +32,7 @@ class MockPinger(object):
   # Returns a fake ping time such that the last host is always the 'fastest'.
   def pings(self, hosts):
     return map(lambda host: (host, self._hosts_to_times.get(host, 9999)), hosts)
+
 
 # A very trivial server that serves files under the cwd.
 class SimpleRESTHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
@@ -59,8 +62,10 @@ class SimpleRESTHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
       self.send_error(404, 'File not found')
     self.end_headers()
 
+
 TEST_CONTENT1 = 'muppet'
 TEST_CONTENT2 = 'kermit'
+
 
 class TestArtifactCache(unittest.TestCase):
   @contextmanager

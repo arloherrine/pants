@@ -2,12 +2,12 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-from hashlib import sha1
 import os
 import re
+from hashlib import sha1
 
 from twitter.common.dirutil import Fileset
 from twitter.common.lang import AbstractClass, Compatibility
@@ -177,7 +177,7 @@ class JarRules(object):
     """Creates a new set of jar rules with the default duplicate action of ``Duplicate.SKIP``.
 
     :param rules: One or more rules that will be applied in order to jar entries being packaged in
-      a deploy jar.
+      a deploy jar. `Skip <#Skip>`_ rules can go here.
     :param default_dup_action: The default action to take when a duplicate entry is encountered and
       no explicit rules apply to the entry.
     """

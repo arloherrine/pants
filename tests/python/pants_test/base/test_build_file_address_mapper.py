@@ -2,23 +2,21 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import os
 from textwrap import dedent
 
 from pants.backend.core.targets.dependencies import Dependencies
-from pants.base.address import BuildFileAddress
+from pants.base.address import BuildFileAddress, SyntheticAddress
 from pants.base.address_lookup_error import AddressLookupError
 from pants.base.build_file_address_mapper import BuildFileAddressMapper
-
 from pants_test.base_test import BaseTest
 
 
-# TODO(Eric Ayers) There are methods in BuildFileAdressMapper that are missing
-# expicit unit tests: address_map_from_spec_path, addresses_in_spec_path,
-# spec_to_address, spec_to_addresses
+# TODO(Eric Ayers) There are methods in BuildFileAddressMapper that are missing
+# explicit unit tests: addresses_in_spec_path, spec_to_address, spec_to_addresses
 
 class BuildFileAddressMapperTest(BaseTest):
   def setUp(self):
@@ -32,9 +30,11 @@ class BuildFileAddressMapperTest(BaseTest):
       '''
     ))
 
-    address = BuildFileAddress(build_file, 'foo')
-    addressable = self.address_mapper.resolve(address)
-    self.assertEquals(address.target_name, addressable.addressable_name)
+    address, addressable = self.address_mapper.resolve(SyntheticAddress.parse('//:foo'))
+    self.assertIsInstance(address, BuildFileAddress)
+    self.assertEqual(build_file, address.build_file)
+    self.assertEqual('foo', address.target_name)
+    self.assertEqual(address.target_name, addressable.addressable_name)
     self.assertEqual(addressable.target_type, Dependencies)
 
   def test_resolve_spec(self):
@@ -110,4 +110,3 @@ class BuildFileAddressMapperTest(BaseTest):
     self.assertIsInstance(BuildFileAddressMapper.InvalidBuildFileReference(), AddressLookupError)
     self.assertIsInstance(BuildFileAddressMapper.InvalidAddressError(), AddressLookupError)
     self.assertIsInstance(BuildFileAddressMapper.BuildFileScanError(), AddressLookupError)
-

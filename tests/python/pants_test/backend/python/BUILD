@@ -6,6 +6,7 @@ target(
   dependencies=[
     ':test_builder',
     ':test_python_requirement_list',
+    'tests/python/pants_test/backend/python/tasks'
   ]
 )
 
@@ -14,6 +15,7 @@ python_tests(
   sources=['test_test_builder.py'],
   dependencies=[
     '3rdparty/python:coverage',
+    '3rdparty/python:pex',
     'src/python/pants/backend/python/targets:python',
     'src/python/pants/backend/python:test_builder',
     'src/python/pants/base:build_file_aliases',

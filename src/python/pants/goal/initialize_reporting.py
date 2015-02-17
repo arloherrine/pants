@@ -2,15 +2,15 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
+import errno
 import os
 import sys
 
 from twitter.common.lang import Compatibility
 
-from pants.base.config import Config
 from pants.reporting.html_reporter import HtmlReporter
 from pants.reporting.plaintext_reporter import PlainTextReporter
 from pants.reporting.quiet_reporter import QuietReporter
@@ -29,8 +29,6 @@ def initial_reporting(config, run_tracker):
   """
   reports_dir = os.path.join(config.getdefault('pants_workdir'), 'reports')
   link_to_latest = os.path.join(reports_dir, 'latest')
-  if os.path.lexists(link_to_latest):
-    os.unlink(link_to_latest)
 
   run_id = run_tracker.run_info.get_info('id')
   if run_id is None:
@@ -40,7 +38,15 @@ def initial_reporting(config, run_tracker):
 
   html_dir = os.path.join(run_dir, 'html')
   safe_mkdir(html_dir)
-  os.symlink(run_dir, link_to_latest)
+
+  try:
+    if os.path.lexists(link_to_latest):
+      os.unlink(link_to_latest)
+    os.symlink(run_dir, link_to_latest)
+  except OSError as e:
+    # Another run may beat us to deletion or creation.
+    if not (e.errno == errno.EEXIST or e.errno == errno.ENOENT):
+      raise
 
   report = Report()
 

@@ -2,15 +2,18 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-from argparse import ArgumentParser, _HelpAction
 import copy
+from argparse import ArgumentParser, _HelpAction
+from collections import namedtuple
+
+import six
 
 from pants.option.arg_splitter import GLOBAL_SCOPE
 from pants.option.errors import ParseError, RegistrationError
-from pants.option.help_formatter import PantsHelpFormatter
+from pants.option.help_formatter import PantsAdvancedHelpFormatter, PantsBasicHelpFormatter
 from pants.option.ranked_value import RankedValue
 
 
@@ -47,10 +50,52 @@ class Parser(object):
   :param parent_parser: the parser for the scope immediately enclosing this one, or
          None if this is the global scope.
   """
-  def __init__(self, env, config, scope, parent_parser):
+
+  class BooleanConversionError(ParseError):
+    """Raised when a value other than 'True' or 'False' is encountered."""
+    pass
+
+  class Flag(namedtuple('Flag', ['name', 'inverse_name', 'help_arg'])):
+    """A struct describing a single flag and its corresponding help representation.
+
+    No-argument boolean flags also support an `inverse_name` to set the corresponding option value
+    in the opposite sense from its default.  All other flags will have no `inverse_name`
+    """
+    @classmethod
+    def _create(cls, flag, **kwargs):
+      if (kwargs.get('action') in ('store_false', 'store_true') and
+          flag.startswith('--') and not flag.startswith('--no-')):
+        name = flag[2:]
+        return cls(flag, '--no-' + name, '--[no-]' + name)
+      else:
+        return cls(flag, None, flag)
+
+  @classmethod
+  def expand_flags(cls, *args, **kwargs):
+    """Returns a list of the flags associated with an option registration.
+
+    For example:
+
+      >>> from pants.option.parser import Parser
+      >>> def print_flags(flags):
+      ...   print('\n'.join(map(str, flags)))
+      ...
+      >>> print_flags(Parser.expand_flags('-q', '--quiet', action='store_true',
+      ...                                 help='Squelches all console output apart from errors.'))
+      Flag(name='-q', inverse_name=None, help_arg='-q')
+      Flag(name='--quiet', inverse_name=u'--no-quiet', help_arg=u'--[no-]quiet')
+      >>>
+
+    :param *args: The args (flag names), that would be passed to an option registration.
+    :param **kwargs: The kwargs that would be passed to an option registration.
+    """
+    return [cls.Flag._create(flag, **kwargs) for flag in args]
+
+  def __init__(self, env, config, scope, help_request, parent_parser):
     self._env = env
     self._config = config
     self._scope = scope
+    self._help_request = help_request
 
     # If True, no more registration is allowed on this parser.
     self._frozen = False
@@ -61,8 +106,17 @@ class Parser(object):
     # The argparser we use for formatting help messages.
     # We don't use self._argparser for this as it will have all options from enclosing scopes
     # registered on it too, which would create unnecessarily repetitive help messages.
+    formatter_class = (PantsAdvancedHelpFormatter if help_request and help_request.advanced
+                       else PantsBasicHelpFormatter)
     self._help_argparser = CustomArgumentParser(conflict_handler='resolve',
-                                                formatter_class=PantsHelpFormatter)
+                                                formatter_class=formatter_class)
+
+    # Options are registered in two groups.  The first group will always be displayed in the help
+    # output.  The second group is for advanced options that are not normally displayed, because
+    # they're intended as sitewide config and should not typically be modified by individual users.
+    self._help_argparser_group = self._help_argparser.add_argument_group(title=scope)
+    self._help_argparser_advanced_group = \
+      self._help_argparser.add_argument_group(title='*{0}'.format(scope))
 
     # If True, we have at least one option to show help for.
     self._has_help_options = False
@@ -79,6 +133,22 @@ class Parser(object):
     if self._parent_parser:
       self._parent_parser._register_child_parser(self)
 
+  @staticmethod
+  def str_to_bool(s):
+    if isinstance(s, six.string_types):
+      if s.lower() == 'true':
+        return True
+      elif s.lower() == 'false':
+        return False
+      else:
+        raise Parser.BooleanConversionError('Got "{0}". Expected "True" or "False".'.format(s))
+    if s is True:
+      return True
+    elif s is False:
+      return False
+    else:
+      raise Parser.BooleanConversionError('Got {0}. Expected True or False.'.format(s))
+
   def parse_args(self, args, namespace):
     """Parse the given args and set their values onto the namespace object's attributes."""
     namespace.add_forwardings(self._dest_forwardings)
@@ -91,7 +161,11 @@ class Parser(object):
     return self._help_argparser.format_help() if self._has_help_options else ''
 
   def register(self, *args, **kwargs):
-    """Register an option, using argparse params."""
+    """Register an option, using argparse params.
+
+    Custom extensions to argparse params:
+    :param advanced: if True, the option will be usually be suppressed when displaying help.
+    """
     if self._frozen:
       raise RegistrationError('Cannot register option {0} in scope {1} after registering options '
                               'in any of its inner scopes.'.format(args[0], self._scope))
@@ -102,33 +176,36 @@ class Parser(object):
       ancestor._freeze()
       ancestor = ancestor._parent_parser
 
+    # Pull out our custom arguments, they aren't valid for argparse.
+    advanced = kwargs.pop('advanced', False)
+
     self._validate(args, kwargs)
     dest = self._set_dest(args, kwargs)
 
-    # Is this a boolean flag?
-    if kwargs.get('action') in ('store_false', 'store_true'):
-      inverse_args = []
-      help_args = []
-      for flag in args:
-        if flag.startswith('--') and not flag.startswith('--no-'):
-          inverse_args.append('--no-' + flag[2:])
-          help_args.append('--[no-]{0}'.format(flag[2:]))
-        else:
-          help_args.append(flag)
-    else:
-      inverse_args = None
-      help_args = args
+    inverse_args = []
+    help_args = []
+    for flag in self.expand_flags(*args, **kwargs):
+      if flag.inverse_name:
+        inverse_args.append(flag.inverse_name)
+      help_args.append(flag.help_arg)
+    is_invertible = len(inverse_args) > 0
 
     # Register the option, only on this scope, for the purpose of displaying help.
     # Note that we'll only display the default value for this scope, even though the
     # default may be overridden in inner scopes.
-    raw_default = self._compute_default(dest, kwargs).value
+    raw_default = self._compute_default(dest, is_invertible, kwargs).value
     kwargs_with_default = dict(kwargs, default=raw_default)
-    self._help_argparser.add_argument(*help_args, **kwargs_with_default)
+
+    if advanced:
+      arg_group = self._help_argparser_advanced_group
+    else:
+      arg_group = self._help_argparser_group
+    arg_group.add_argument(*help_args, **kwargs_with_default)
+
     self._has_help_options = True
 
     # Register the option for the purpose of parsing, on this and all enclosed scopes.
-    if inverse_args:
+    if is_invertible:
       inverse_kwargs = self._create_inverse_kwargs(kwargs)
       self._register_boolean(dest, args, kwargs, inverse_args, inverse_kwargs)
     else:
@@ -136,7 +213,7 @@ class Parser(object):
 
   def _register(self, dest, args, kwargs):
     """Recursively register the option for parsing."""
-    ranked_default = self._compute_default(dest, kwargs)
+    ranked_default = self._compute_default(dest, is_invertible=False, kwargs=kwargs)
     kwargs_with_default = dict(kwargs, default=ranked_default)
     self._argparser.add_argument(*args, **kwargs_with_default)
 
@@ -147,7 +224,7 @@ class Parser(object):
   def _register_boolean(self, dest, args, kwargs, inverse_args, inverse_kwargs):
     """Recursively register the boolean option, and its inverse, for parsing."""
     group = self._argparser.add_mutually_exclusive_group()
-    ranked_default = self._compute_default(dest, kwargs)
+    ranked_default = self._compute_default(dest, is_invertible=True, kwargs=kwargs)
     kwargs_with_default = dict(kwargs, default=ranked_default)
     group.add_argument(*args, **kwargs_with_default)
     group.add_argument(*inverse_args, **inverse_kwargs)
@@ -209,16 +286,32 @@ class Parser(object):
     arg = next((a for a in args if a.startswith('--')), args[0])
     return arg.lstrip('-').replace('-', '_')
 
-  def _compute_default(self, dest, kwargs):
+  def _compute_default(self, dest, is_invertible, kwargs):
     """Compute the default value to use for an option's registration.
 
     The source of the default value is chosen according to the ranking in RankedValue.
     """
     config_section = 'DEFAULT' if self._scope == GLOBAL_SCOPE else self._scope
-    env_var = 'PANTS_{0}_{1}'.format(config_section.upper().replace('.', '_'), dest.upper())
-    value_type = kwargs.get('type', str)
-    env_val_str = self._env.get(env_var) if self._env else None
-
+    udest = dest.upper()
+    if self._scope == GLOBAL_SCOPE:
+      # For convenience, we allow three forms of env var for global scope options.
+      # The fully-specified env var is PANTS_DEFAULT_FOO, which is uniform with PANTS_<SCOPE>_FOO
+      # for all the other scopes.  However we also allow simply PANTS_FOO. And if the option name
+      # itself starts with 'pants-' then we also allow simply FOO. E.g., PANTS_WORKDIR instead of
+      # PANTS_PANTS_WORKDIR or PANTS_DEFAULT_PANTS_WORKDIR. We take the first specified value we
+      # find, in this order: PANTS_DEFAULT_FOO, PANTS_FOO, FOO.
+      env_vars = ['PANTS_DEFAULT_{0}'.format(udest), 'PANTS_{0}'.format(udest)]
+      if udest.startswith('PANTS_'):
+        env_vars.append(udest)
+    else:
+      env_vars = ['PANTS_{0}_{1}'.format(config_section.upper().replace('.', '_'), udest)]
+    value_type = self.str_to_bool if is_invertible else kwargs.get('type', str)
+    env_val_str = None
+    if self._env:
+      for env_var in env_vars:
+        if env_var in self._env:
+          env_val_str = self._env.get(env_var)
+          break
     env_val = None if env_val_str is None else value_type(env_val_str)
     if kwargs.get('action') == 'append':
       config_val_strs = self._config.getlist(config_section, dest) if self._config else None

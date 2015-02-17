@@ -2,12 +2,12 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-from contextlib import contextmanager
 import os
-import unittest2 as unittest
+import unittest
+from contextlib import contextmanager
 
 from pants.base.address import SyntheticAddress
 from pants.base.build_configuration import BuildConfiguration
@@ -36,10 +36,7 @@ class BuildConfigurationTest(unittest.TestCase):
     parse_state = self.build_configuration.initialize_parse_state(build_file)
 
     self.assertEqual(0, len(parse_state.registered_addressable_instances))
-    self.assertEqual(2, len(parse_state.parse_globals))
-
-    self.assertEqual(parse_state.parse_globals['__file__'],
-                     os.path.realpath('/tmp/fred'))
+    self.assertEqual(1, len(parse_state.parse_globals))
 
     target_call_proxy = parse_state.parse_globals['fred']
     target_call_proxy(name='jake')
@@ -68,9 +65,7 @@ class BuildConfigurationTest(unittest.TestCase):
     parse_state = self.build_configuration.initialize_parse_state(build_file)
 
     self.assertEqual(0, len(parse_state.registered_addressable_instances))
-    self.assertEqual(2, len(parse_state.parse_globals))
-    self.assertEqual(parse_state.parse_globals['__file__'],
-                     os.path.realpath('/tmp/jane'))
+    self.assertEqual(1, len(parse_state.parse_globals))
     self.assertEqual(42, parse_state.parse_globals['jane'])
 
   def test_register_bad_exposed_object(self):
@@ -134,9 +129,7 @@ class BuildConfigurationTest(unittest.TestCase):
       parse_state = self.build_configuration.initialize_parse_state(build_file)
 
       self.assertEqual(0, len(parse_state.registered_addressable_instances))
-      self.assertEqual(2, len(parse_state.parse_globals))
-      self.assertEqual(os.path.realpath(build_file_path),
-                       parse_state.parse_globals['__file__'])
+      self.assertEqual(1, len(parse_state.parse_globals))
       yield parse_state.parse_globals['george']
 
   def test_register_bad_exposed_context_aware_object(self):

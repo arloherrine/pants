@@ -2,12 +2,12 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
+import os
 from collections import defaultdict
 from contextlib import closing, contextmanager
-import os
 from textwrap import dedent
 
 from pants.backend.codegen.targets.java_thrift_library import JavaThriftLibrary
@@ -30,7 +30,7 @@ class JarCreateTestBase(JarTaskTestBase):
 
   def setUp(self):
     super(JarCreateTestBase, self).setUp()
-    self.set_new_options(compressed=False)
+    self.set_options(compressed=False)
 
 
 class JarCreateMiscTest(JarCreateTestBase):

@@ -2,12 +2,12 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-from collections import namedtuple
 import inspect
 import logging
+from collections import namedtuple
 
 from pants.base.addressable import AddressableCallProxy
 from pants.base.build_file_aliases import BuildFileAliases
@@ -133,19 +133,14 @@ class BuildConfiguration(object):
       registered_addressable_instances.append((address, addressable))
 
     for alias, addressable_type in self._addressable_alias_map.items():
-      call_proxy =  AddressableCallProxy(addressable_type=addressable_type,
-                                         build_file=build_file,
-                                         registration_callback=registration_callback)
+      call_proxy = AddressableCallProxy(addressable_type=addressable_type,
+                                        build_file=build_file,
+                                        registration_callback=registration_callback)
       type_aliases[alias] = call_proxy
 
     parse_context = ParseContext(rel_path=build_file.spec_path, type_aliases=type_aliases)
 
     parse_globals = type_aliases.copy()
-
-    # TODO(pl): Don't inject __file__ into the context.  BUILD files should not be aware
-    # of their location on the filesystem.
-    parse_globals['__file__'] = build_file.full_path
-
     for alias, object_factory in self._exposed_context_aware_object_factories.items():
       parse_globals[alias] = object_factory(parse_context)
 

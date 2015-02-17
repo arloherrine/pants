@@ -2,11 +2,27 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 from abc import abstractmethod
+
 from twitter.common.lang import AbstractClass
+
+
+class DefaultFingerprintHashingMixin(object):
+  """Default definitions for __hash__ and __eq__.
+
+  Warning: Don't use this when the mixed in class has instance attributes mixed into its
+  fingerprints.  This will cause subtle bugs because fingerprints are cached on the Target
+  base class, and the cache key is the instance of the FingerprintStrategy.
+  """
+
+  def __hash__(self):
+    return hash(type(self))
+
+  def __eq__(self, other):
+    return type(self) == type(other)
 
 
 class FingerprintStrategy(AbstractClass):
@@ -18,8 +34,11 @@ class FingerprintStrategy(AbstractClass):
 
   def fingerprint_target(self, target):
     """Consumers of subclass instances call this to get a fingerprint labeled with the name"""
-    return '{fingerprint}-{name}'.format(fingerprint=self.compute_fingerprint(target),
-                                         name=type(self).__name__)
+    fingerprint = self.compute_fingerprint(target)
+    if fingerprint:
+      return '{fingerprint}-{name}'.format(fingerprint=fingerprint, name=type(self).__name__)
+    else:
+      return None
 
   @abstractmethod
   def __hash__(self):
@@ -30,14 +49,8 @@ class FingerprintStrategy(AbstractClass):
     """Subclasses must implement an equality check so computed fingerprints can be safely memoized."""
 
 
-class DefaultFingerprintStrategy(FingerprintStrategy):
+class DefaultFingerprintStrategy(DefaultFingerprintHashingMixin, FingerprintStrategy):
   """The default FingerprintStrategy, which delegates to target.payload.invalidation_hash()."""
 
   def compute_fingerprint(self, target):
     return target.payload.fingerprint()
-
-  def __hash__(self):
-    return hash(type(self))
-
-  def __eq__(self, other):
-    return type(self) == type(other)

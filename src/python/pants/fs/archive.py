@@ -2,23 +2,25 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
+
+import os
+from abc import abstractmethod
+from collections import OrderedDict
+from zipfile import ZIP_DEFLATED
+
+from twitter.common.lang import AbstractClass
+
+from pants.util.contextutil import open_tar, open_zip64
+from pants.util.dirutil import safe_walk
+from pants.util.strutil import ensure_text
 
 
 """Support for wholesale archive creation and extraction in a uniform API across archive types."""
 
-import os
 
-from abc import abstractmethod
-from zipfile import ZIP_DEFLATED
 
-from twitter.common.collections.ordereddict import OrderedDict
-from twitter.common.lang import AbstractClass
-
-from pants.util.contextutil import open_tar, open_zip
-from pants.util.dirutil import safe_walk
-from pants.util.strutil import ensure_text
 
 
 class Archiver(AbstractClass):
@@ -60,24 +62,26 @@ class ZipArchiver(Archiver):
   """An archiver that stores files in a zip file with optional compression."""
 
   @classmethod
-  def extract(cls, path, outdir, filter=None):
-    """OS X's python 2.6.1 has a bug in zipfile that makes it unzip directories as regular files.
+  def extract(cls, path, outdir, filter_func=None):
+    """Extract from a zip file, with an optional filter
 
-    This method should work on for python 2.6-3.x.
     :param string path: path to the zipfile to extract from
     :param string outdir: directory to extract files into
-    :param function filter: optional filter with the filename as the parameter.  Returns True if
+    :param function filter_func: optional filter with the filename as the parameter.  Returns True if
       the file should be extracted.
     """
-    with open_zip(path) as zip:
-      for path in zip.namelist():
+    with open_zip64(path) as archive_file:
+      for name in archive_file.namelist():
         # While we're at it, we also perform this safety test.
-        if path.startswith(b'/') or path.startswith(b'..'):
-          raise ValueError('Zip file contains unsafe path: %s' % path)
+        if name.startswith(b'/') or name.startswith(b'..'):
+          raise ValueError('Zip file contains unsafe path: %s' % name)
         # Ignore directories. extract() will create parent dirs as needed.
-        if not path.endswith(b'/'):
-          if (not filter or filter(path)):
-            zip.extract(path, outdir)
+        # OS X's python 2.6.1 has a bug in zipfile that makes it unzip directories as regular files.
+        # This method should work on for python 2.6-3.x.
+        # TODO(Eric Ayers) Pants no longer builds with python 2.6. Can this be removed?
+        if not name.endswith(b'/'):
+          if (not filter_func or filter_func(name)):
+            archive_file.extract(name, outdir)
 
   def __init__(self, compression):
     Archiver.__init__(self)
@@ -85,7 +89,7 @@ class ZipArchiver(Archiver):
 
   def create(self, basedir, outdir, name, prefix=None):
     zippath = os.path.join(outdir, '%s.zip' % name)
-    with open_zip(zippath, 'w', compression=ZIP_DEFLATED) as zip:
+    with open_zip64(zippath, 'w', compression=ZIP_DEFLATED) as zip:
       for root, _, files in safe_walk(basedir):
         root = ensure_text(root)
         for file in files:
@@ -103,7 +107,7 @@ TGZ = TarArchiver('w:gz', 'tar.gz')
 TBZ2 = TarArchiver('w:bz2', 'tar.bz2')
 ZIP = ZipArchiver(ZIP_DEFLATED)
 
-_ARCHIVER_BY_TYPE = OrderedDict(tar=TGZ, tgz=TGZ, tbz2=TBZ2, zip=ZIP)
+_ARCHIVER_BY_TYPE = OrderedDict(tar=TAR, tgz=TGZ, tbz2=TBZ2, zip=ZIP)
 
 TYPE_NAMES = frozenset(_ARCHIVER_BY_TYPE.keys())
 

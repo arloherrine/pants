@@ -2,12 +2,13 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import re
-import six
 import shlex
+
+import six
 
 
 def ensure_binary(text_or_binary):
@@ -26,6 +27,10 @@ def ensure_text(text_or_binary):
     return text_or_binary
   else:
     raise TypeError('Argument is neither text nor binary type.')
+
+
+def is_text_or_binary(obj):
+  return isinstance(obj, (six.text_type, six.binary_type))
 
 
 def safe_shlex_split(text_or_binary):

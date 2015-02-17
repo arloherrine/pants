@@ -28,30 +28,32 @@ Debugging a BUILD File
 If you're curious to know how Pants interprets your `BUILD` file, these
 techniques can be especially helpful:
 
-*Did I define the targets I meant to?* Use `goal list`:
+*Did I define the targets I meant to?* Use `list`:
 
     :::bash
-    $ ./pants goal list examples/src/java/com/pants/examples/hello/greet
+    $ ./pants list examples/src/java/com/pants/examples/hello/greet
     examples/src/java/com/pants/examples/hello/greet:greet
 
 *Did a change in one `BUILD` file break others?*
 List **every** target to find out:
-Use the recursive wildcard: `goal list ::`
+Use the recursive wildcard: `list ::`
 
     :::bash
-    $ ./pants goal list ::
+    $ ./pants list ::
       ...lots of output...
-      File "pants/targets/internal.py", line 174, in dependencies
-      File "pants/targets/internal.py", line 189, in _maybe_apply_deps
-      File "pants/targets/internal.py", line 195, in update_dependencies
-      File "pants/targets/pants_target.py", line 60, in resolve
-    KeyError: 'Failed to find target for: src/python/pants/docs/BUILD:obsolete'
-    $ # Instead of listing all targets, a stack trace. We found a problem
+      File "pants/commands/command.py", line 79, in __init__
+      File "pants/commands/goal_runner.py", line 144, in setup_parser
+      File "pants/base/build_graph.py", line 351, in inject_address_closure
+    TransitiveLookupError: great was not found in BUILD file examples/src/java/com/pants/examples/h
+    ello/greet/BUILD. Perhaps you meant:
+      :greet
+      referenced from examples/src/scala/com/pants/example/hello/welcome:welcome
+    $ # Instead of listing all targets, an error message. We found a problem
 
-*Do I pull in the dependencies I expect?* Use `goal depmap` (JVM languages only):
+*Do I pull in the dependencies I expect?* Use `depmap` (JVM languages only):
 
     :::bash
-    $ ./pants goal depmap examples/tests/java/com/pants/examples/hello/greet
+    $ ./pants depmap examples/tests/java/com/pants/examples/hello/greet
     internal-examples.tests.java.com.pants.examples.hello.greet.greet
       internal-3rdparty.junit
         internal-3rdparty.hamcrest-core
@@ -62,10 +64,10 @@ Use the recursive wildcard: `goal list ::`
       junit-junit-dep-4.11
       org.hamcrest-hamcrest-core-1.3
 
-*What source files do I depend on?* Use `goal filedeps`:
+*What source files do I depend on?* Use `filedeps`:
 
     :::bash
-    $ ./pants goal filedeps examples/src/java/com/pants/examples/hello/main
+    $ ./pants filedeps examples/src/java/com/pants/examples/hello/main
     ~archie/workspace/pants/examples/src/resources/com/pants/example/hello/BUILD
     ~archie/workspace/pants/examples/src/java/com/pants/examples/hello/main/BUILD
     ~archie/workspace/pants/examples/src/java/com/pants/examples/hello/main/config/greetee.txt
@@ -177,7 +179,7 @@ the same sources. Consider the following refactor adding a subpackage:
     # src/java/com/twitter/tugboat/maint/MaintenanceLog.java
 
     # target src/java/com/twitter/tugboat
-    # Existing target now untentionally claims the 'maint' package.
+    # Existing target now unintentionally claims the 'maint' package.
     java_library(name='tugboat',
       sources=rglobs('*.java'),
     )
@@ -358,7 +360,7 @@ Though your repo might contain many `BUILD` files, Pants might not
 execute all of them. If you invoke:
 
     :::bash
-    ./pants goal test examples/tests/java/com/pants/examples/hello/greet:greet
+    ./pants test examples/tests/java/com/pants/examples/hello/greet:greet
 
 Pants executes the source tree's top-level `BUILD` file (executed on
 every Pants run) and
@@ -385,41 +387,6 @@ definition that only makes sense behind your organization's firewall.
 A build target defined in `BUILD.foo` can't have the same `name` as a
 build target defined in the same directory's `BUILD` file; they share a
 namespace.
-
-Tag Incompatibilities with exclusives
--------------------------------------
-
-A big code workspace might contain some parts that aren't compatible
-with each other. To make sure that no target tries to use targets that
-don't work together, you can tag those targets with `exclusives`.
-
-For example, suppose that we had two java targets, jliba and jlibb.
-jliba uses `slf4j`, which includes in its jar package an implementation
-of `log4j`. jlibb uses `log4j` directly. But the version of log4j that's
-packaged inside of `slf4j` is different from the version used by jlibb.
-:
-
-    :::python
-    java_library(name='jliba',
-      dependencies = ['3rdparty/jvm/org/slf4j:slf4j-with-log4j-2.4'])
-    java_library(name='jlibb',
-      dependencies=['3rdparty/jvm/log4j:log4j-1.9'])
-    java_binary(name='javabin', dependencies=[':jliba', ':jlibb'])
-
-In this case, the binary target `javabin` depends on both `slf4j` with
-its packaged `log4j` version 2.4, and on `log4j-1.9`. Pants doesn't know
-that the slf4j and log4j `jar_dependencies` contain incompatible
-versions of the same library, and so it can't detect the error.
-
-With exclusives, the `jar_library` target for the joda libraries would
-declare exclusives tags:
-
-    :::python
-    jar_library(name='slf4j-with-log4j-2.4', exclusives={'log4j': '2.4'}, jars=[...])
-    java_library(name='jlibb', exclusives={'log4j': '1.9'}, dependencies=[...])
-
-With the exclusives declared, pants can recognize that 'javabin' has
-conflicting dependencies, and can generate an appropriate error message.
 
 <a pantsmark="build_pants_wrapper_gone"> </a>
 

@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 from pants.backend.jvm.targets.jvm_target import JvmTarget
 from pants.base.config import Config
@@ -54,16 +54,20 @@ class JavaThriftLibrary(JvmTarget):
                thrift_linter_strict=None,
                **kwargs):
     """
-    :param compiler: The compiler used to compile the thrift files; default is 'thrift'
-      (The apache thrift compiler).
-    :param language: The language used to generate the output files; defaults to 'java'.
-    :param rpc_style: An optional rpc style to generate service stubs with.
+    :param compiler: The compiler used to compile the thrift files. Default is the ``.ini`` file's
+      ``[java-thrift-library] compiler`` setting, if any, else 'thrift' (the apache thrift
+      compiler).
+    :param language: The language used to generate the output files. Defaults to the ``.ini``
+      file's ``[java-thrift-library] language`` setting, if any, else 'java'.
+    :param rpc_style: An optional rpc style to generate service stubs with. Default is the
+       ``.ini`` file's ``[java-thrift-library] rpc_style`` setting, if any, else 'sync'.
     :param namespace_map: An optional dictionary of namespaces to remap {old: new}
     :param thrift_linter_strict: If True, fail if thrift linter produces any warnings.
     """
 
     super(JavaThriftLibrary, self).__init__(**kwargs)
 
+    # TODO(Eric Ayers) As of 2/5/2015 this call is DEPRECATED and should be removed soon
     self.add_labels('codegen')
 
     def check_value_for_arg(arg, value, values):
@@ -80,6 +84,7 @@ class JavaThriftLibrary(JvmTarget):
     self.namespace_map = namespace_map
     self.thrift_linter_strict = thrift_linter_strict
 
+  # TODO(Eric Ayers) As of 2/5/2015 this call is DEPRECATED and should be removed soon
   @property
   def is_thrift(self):
     return True

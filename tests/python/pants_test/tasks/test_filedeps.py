@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 import os
 from textwrap import dedent
@@ -17,6 +17,7 @@ from pants.backend.jvm.targets.jvm_binary import Bundle, JvmApp, JvmBinary
 from pants.backend.jvm.targets.scala_library import ScalaLibrary
 from pants.backend.jvm.tasks.filedeps import FileDeps
 from pants.base.build_file_aliases import BuildFileAliases
+from pants.base.config import Config
 from pants_test.tasks.test_base import ConsoleTaskTest
 
 
@@ -57,10 +58,13 @@ class FileDepsTest(ConsoleTaskTest):
 
     self.create_file('pants.ini',
                      contents=dedent('''
-                       [scala-compile]
+                       [compile.scala]
                        runtime-deps: ['tools:scala-library']
                      '''),
                      mode='a')
+
+    # TODO: Required because target code has no direct config reference. Remove after fixing that.
+    Config.cache(Config.load())
 
     create_target(path='tools',
                   definition=dedent('''

@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 from abc import abstractmethod, abstractproperty
 
@@ -21,6 +21,10 @@ class Scm(AbstractClass):
 
   class LocalException(ScmException):
     """Indicates a problem performing a local scm operation."""
+
+  @abstractproperty
+  def current_rev_identifier(self):
+    """Identifier for the tip/head of the current branch eg. "HEAD" in git"""
 
   @abstractproperty
   def commit_id(self):
@@ -51,6 +55,14 @@ class Scm(AbstractClass):
 
     If relative_to is None, then the paths will be relative to the working tree of the SCM
     implementation (which might NOT match the buildroot.)
+    """
+
+  @abstractmethod
+  def changes_in(self, diffspec, relative_to=None):
+    """Returns a list of files changed by some diffspec (eg sha, range, ref, etc)
+
+    :param str diffspec: Some diffspec meaningful to the SCM.
+    :param str relative_to: a path to which results should be relative (instead of SCM root)
     """
 
   @abstractmethod

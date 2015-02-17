@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 from pants.option.ranked_value import RankedValue
 
@@ -87,6 +87,11 @@ class OptionValueContainer(object):
       # We set values from outer scopes before values from inner scopes, so
       # in case of equal rank we overwrite. That way that the inner scope value wins.
       super(OptionValueContainer, self).__setattr__(key, value)
+
+  def __getitem__(self, key):
+    # Support natural dynamic access, options[key_var] is more idiomatic than
+    # getattr(option, key_var).
+    return getattr(self, key)
 
   def __getattr__(self, key):
     # Note: Called only if regular attribute lookup fails, so accesses

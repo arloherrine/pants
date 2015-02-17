@@ -2,8 +2,8 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
 from textwrap import dedent
 
@@ -12,6 +12,7 @@ from pants.backend.jvm.targets.jar_library import JarLibrary
 from pants.backend.jvm.targets.java_library import JavaLibrary
 from pants.backend.jvm.targets.scala_library import ScalaLibrary
 from pants.base.build_file_aliases import BuildFileAliases
+from pants.base.config import Config
 from pants_test.base_test import BaseTest
 
 
@@ -33,9 +34,12 @@ class ScalaLibraryTest(BaseTest):
     super(ScalaLibraryTest, self).setUp()
 
     self.create_file('pants.ini', dedent('''
-        [scala-compile]
+        [compile.scala]
         runtime-deps: []
         '''))
+
+    # TODO: Required because target code has no direct config reference. Remove after fixing that.
+    Config.cache(Config.load())
 
     self.add_to_build_file('3rdparty', dedent('''
         jar_library(

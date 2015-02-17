@@ -2,21 +2,16 @@
 # Copyright 2014 Pants project contributors (see CONTRIBUTORS.md).
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-from __future__ import (nested_scopes, generators, division, absolute_import, with_statement,
-                        print_function, unicode_literals)
+from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
+                        unicode_literals, with_statement)
 
-try:
-  import configparser
-except ImportError:
-  import ConfigParser as configparser
-
-from contextlib import contextmanager
 import itertools
 import logging
 import os
 import shutil
-from textwrap import dedent
 import traceback
+from contextlib import contextmanager
+from textwrap import dedent
 
 from pex.interpreter import PythonInterpreter
 from pex.pex import PEX
@@ -28,11 +23,22 @@ from pants.backend.python.python_requirement import PythonRequirement
 from pants.backend.python.targets.python_tests import PythonTests
 from pants.base.config import Config
 from pants.base.target import Target
-from pants.util.contextutil import temporary_file, temporary_dir, environment_as
+from pants.util.contextutil import environment_as, temporary_dir, temporary_file
 from pants.util.dirutil import safe_mkdir, safe_open
+
+
+try:
+  import configparser
+except ImportError:
+  import ConfigParser as configparser
+
+
+
+
 
 # Initialize logging, since tests do not run via pants_exe (where it is usually done)
 logging.basicConfig()
+
 
 class PythonTestResult(object):
   @staticmethod
@@ -65,11 +71,11 @@ class PythonTestBuilder(object):
     PythonRequirement('unittest2py3k', version_filter=lambda py, pl: py.startswith('3'))
   ]
 
-  def __init__(self, targets, args, interpreter=None, conn_timeout=None, fast=False, debug=False):
+  def __init__(self, context, targets, args, interpreter=None, fast=False, debug=False):
+    self.context = context
     self._targets = targets
     self._args = args
     self._interpreter = interpreter or PythonInterpreter.get()
-    self._conn_timeout = conn_timeout
 
     # If fast is true, we run all the tests in a single chroot. This is MUCH faster than
     # creating a chroot for each test target. However running each test separately is more
@@ -151,7 +157,9 @@ class PythonTestBuilder(object):
       add_realpath(canonical)
       for path in alternates:
         add_realpath(path)
-      cp.set('paths', key, self._format_string_list([canonical] + list(alternates) + list(realpaths)))
+      cp.set('paths',
+             key,
+             self._format_string_list([canonical] + list(alternates) + list(realpaths)))
 
     # See the debug options here: http://nedbatchelder.com/code/coverage/cmd.html#cmd-run-debug
     if self._debug:
@@ -282,18 +290,21 @@ class PythonTestBuilder(object):
           safe_mkdir(target_dir)
           pex.run(args=['html', '-i', '--rcfile', coverage_rc, '-d', target_dir],
                   stdout=stdout, stderr=stderr)
+          coverage_xml = os.path.join(target_dir, 'coverage.xml')
+          pex.run(args=['xml', '-i', '--rcfile', coverage_rc, '-o', coverage_xml],
+                  stdout=stdout, stderr=stderr)
 
   @contextmanager
   def _test_runner(self, targets, stdout, stderr):
     builder = PEXBuilder(interpreter=self._interpreter)
     builder.info.entry_point = 'pytest'
     chroot = PythonChroot(
+      context=self.context,
       targets=targets,
       extra_requirements=self._TESTING_TARGETS,
       builder=builder,
       platforms=('current',),
-      interpreter=self._interpreter,
-      conn_timeout=self._conn_timeout)
+      interpreter=self._interpreter)
     try:
       builder = chroot.dump()
       builder.freeze()
@@ -323,8 +334,14 @@ class PythonTestBuilder(object):
       args.extend(sources)
 
       try:
-        rc = pex.run(args=args, setsid=True, stdout=stdout, stderr=stderr)
-        return PythonTestResult.rc(rc)
+        # The pytest runner we use accepts a --pdb argument that will launch an interactive pdb
+        # session on any test failure.  In order to support use of this pass-through flag we must
+        # turn off stdin buffering that otherwise occurs.  Setting the PYTHONUNBUFFERED env var to
+        # any value achieves this in python2.7.  We'll need a different solution when we support
+        # running pants under CPython 3 which does not unbuffer stdin using this trick.
+        with environment_as(PYTHONUNBUFFERED='1'):
+          rc = pex.run(args=args, setsid=True, stdout=stdout, stderr=stderr)
+          return PythonTestResult.rc(rc)
       except Exception:
         print('Failed to run test!', file=stderr)
         traceback.print_exc()

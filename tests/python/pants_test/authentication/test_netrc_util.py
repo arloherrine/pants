@@ -5,8 +5,8 @@
 from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
                         unicode_literals, with_statement)
 
-from contextlib import contextmanager
 import re
+from contextlib import contextmanager
 
 import pytest
 from mock import MagicMock, mock_open, patch

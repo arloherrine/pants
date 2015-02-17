@@ -5,10 +5,11 @@ python_library(
   name = 'base_test',
   sources = ['base_test.py'],
   dependencies = [
+    '3rdparty/python/twitter/commons:twitter.common.collections',
     'src/python/pants/backend/core/targets:common',
-    'src/python/pants/backend/core/tasks:check_exclusives',
     'src/python/pants/base:address',
     'src/python/pants/base:build_configuration',
+    'src/python/pants/base:build_environment',
     'src/python/pants/base:build_file_address_mapper',
     'src/python/pants/base:build_file_aliases',
     'src/python/pants/base:build_file_parser',
@@ -76,26 +77,11 @@ python_tests(
   ]
 )
 
-python_tests(
-  name = 'test_utf8_header',
-  sources = ['test_utf8_header.py'],
-  dependencies = [
-    '3rdparty/python/twitter/commons:twitter.common.lang',
-    'src/python/internal_backend:plugins',
-    'src/python/pants/base:build_environment',
-    'src/python/pants/base:build_file_address_mapper',
-    'src/python/pants/base:build_file_parser',
-    'src/python/pants/base:build_graph',
-    'src/python/pants/base:config',
-    'src/python/pants/base:dev_backend_loader',
-  ]
-)
-
 target(
   name = 'integration',
   dependencies = [
     'tests/python/pants_test/android:integration',
-    'tests/python/pants_test/commands:integration',
+    'tests/python/pants_test/base:integration',
     'tests/python/pants_test/targets:integration',
     'tests/python/pants_test/tasks:integration',
     'tests/python/pants_test/python:integration',
@@ -108,16 +94,15 @@ python_test_suite(
     ':test_binary_util',
     ':test_maven_layout',
     ':test_thrift_util',
-    ':test_utf8_header',
     'tests/python/pants_test/android',
     'tests/python/pants_test/authentication:netrc',
     'tests/python/pants_test/backend',
     'tests/python/pants_test/base',
     'tests/python/pants_test/cache',
-    'tests/python/pants_test/commands',
     'tests/python/pants_test/engine',
     'tests/python/pants_test/fs',
     'tests/python/pants_test/graph',
+    'tests/python/pants_test/goal',
     'tests/python/pants_test/java',
     'tests/python/pants_test/net',
     'tests/python/pants_test/option',
