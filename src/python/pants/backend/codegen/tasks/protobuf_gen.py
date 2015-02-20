@@ -323,10 +323,11 @@ def calculate_java_genfiles(protobuf_parse, service_prefixes):
   if protobuf_parse.multiple_files:
     classnames |= protobuf_parse.enums | protobuf_parse.messages | \
       set(['{name}OrBuilder'.format(name=m) for m in protobuf_parse.messages])
-    # for custom boxcar generation
-    classnames |= set('{}{}'.format(prefix, service)
-                      for service in protobuf_parse.services
-                      for prefix in service_prefixes)
+
+  # for custom boxcar generation
+  classnames |= set('{}{}'.format(prefix, service)
+                    for service in protobuf_parse.services
+                    for prefix in service_prefixes)
 
   for classname in classnames:
     yield os.path.join(basepath, '{0}.java'.format(classname))
